@@ -2,8 +2,8 @@
 import PackageDescription
 
 let package = Package(
-    name: "Hello",
+    name: "Platformer",
     platforms: [.macOS(.v15)],
     dependencies: [.package(name: "PixelKit", path: "../..")],
-    targets: [.executableTarget(name: "Hello", dependencies: ["PixelKit"])]
+    targets: [.executableTarget(name: "Platformer", dependencies: ["PixelKit"])]
 )

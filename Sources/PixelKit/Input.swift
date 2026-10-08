@@ -1,0 +1,41 @@
+import Carbon.HIToolbox // kVK_ key codes
+import GameController
+
+/// A virtual gamepad. Keyboard: arrows or WASD, Z or Space = a, X = b, Return = start.
+/// Game controllers: d-pad or left stick, A, B, Menu.
+public enum Button: Sendable, CaseIterable {
+    case left, right, up, down, a, b, start
+}
+
+@MainActor public enum Input {
+    /// True while the button is down.
+    public static func held(_ button: Button) -> Bool { now.contains(button) }
+
+    /// True only on the update when the button goes down.
+    public static func pressed(_ button: Button) -> Bool { now.contains(button) && !before.contains(button) }
+
+    static var keys: Set<Int> = [] // key codes held right now, fed by GameView
+    static var now: Set<Button> = []
+    static var before: Set<Button> = []
+
+    static let keyMap: [Int: Button] = [
+        kVK_LeftArrow: .left, kVK_ANSI_A: .left, kVK_RightArrow: .right, kVK_ANSI_D: .right,
+        kVK_UpArrow: .up, kVK_ANSI_W: .up, kVK_DownArrow: .down, kVK_ANSI_S: .down,
+        kVK_ANSI_Z: .a, kVK_Space: .a, kVK_ANSI_X: .b, kVK_Return: .start,
+    ]
+
+    /// Runs before each update. ponytail: a tap shorter than one update (1/60 s) is missed; queue key events if that bites.
+    static func poll() {
+        before = now
+        now = Set(keys.compactMap { keyMap[$0] })
+        guard let pad = GCController.current?.extendedGamepad else { return }
+        let (x, y) = (pad.leftThumbstick.xAxis.value, pad.leftThumbstick.yAxis.value)
+        if pad.dpad.left.isPressed || x < -0.5 { now.insert(.left) }
+        if pad.dpad.right.isPressed || x > 0.5 { now.insert(.right) }
+        if pad.dpad.up.isPressed || y > 0.5 { now.insert(.up) }
+        if pad.dpad.down.isPressed || y < -0.5 { now.insert(.down) }
+        if pad.buttonA.isPressed { now.insert(.a) }
+        if pad.buttonB.isPressed { now.insert(.b) }
+        if pad.buttonMenu.isPressed { now.insert(.start) }
+    }
+}
