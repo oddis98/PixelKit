@@ -8,6 +8,7 @@ import MetalKit
     let canvas: MTLTexture
     let loader: MTKTextureLoader
     var textures: [String: MTLTexture] = [:]
+    var modified: [String: Date?] = [:] // each loaded PNG's modification date, to spot edits
     var encoder: MTLRenderCommandEncoder!
     var vertices: [SIMD4<Float>] = [] // queued quads, all using `batchTexture`
     var batchTexture: MTLTexture?
@@ -71,15 +72,33 @@ import MetalKit
 
     func texture(_ name: String) -> MTLTexture {
         if let texture = textures[name] { return texture }
-        // ponytail: reads from the project folder (the editor runs games there); bundle assets on export (Phase 7)
-        let url = URL(fileURLWithPath: "Assets/\(name).png")
+        let url = assetURL(name)
         do {
             let texture = try loader.newTexture(URL: url, options: [.SRGB: false])
             textures[name] = texture
+            modified[name] = modificationDate(url)
             return texture
         } catch {
             fatalError("PixelKit: can't load \(url.path): \(error.localizedDescription)")
         }
+    }
+
+    /// Reloads textures whose PNG changed on disk, e.g. saved by the pixel editor.
+    /// If the new file can't be read (deleted, half-written), the old texture stays.
+    func reloadChangedTextures() {
+        for (name, date) in modified {
+            let url = assetURL(name)
+            guard modificationDate(url) != date else { continue }
+            modified[name] = modificationDate(url)
+            if let texture = try? loader.newTexture(URL: url, options: [.SRGB: false]) { textures[name] = texture }
+        }
+    }
+
+    // ponytail: reads from the project folder (the editor runs games there); bundle assets on export (Phase 7)
+    func assetURL(_ name: String) -> URL { URL(fileURLWithPath: "Assets/\(name).png") }
+
+    func modificationDate(_ url: URL) -> Date? {
+        try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
     }
 
     /// Queues a textured quad. Consecutive quads with the same texture reach the GPU as one draw call.
@@ -129,6 +148,7 @@ final class GameView: MTKView {
     let queue: MTLCommandQueue
     var last = CACurrentMediaTime()
     var lag = 0.0 // time not simulated yet
+    var frames = 0
 
     init(resolution: Size) {
         let device = MTLCreateSystemDefaultDevice()!
@@ -156,6 +176,8 @@ final class GameView: MTKView {
             Scene.current.update(Self.step)
             lag -= Self.step
         }
+        frames += 1
+        if frames % 15 == 0 { screen.reloadChangedTextures() } // 4 times a second
 
         guard let drawable = currentDrawable, let window = currentRenderPassDescriptor,
               let commands = queue.makeCommandBuffer() else { return }
