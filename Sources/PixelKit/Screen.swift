@@ -172,67 +172,6 @@ import PixelKitProtocol
     }
 }
 
-/// Runs the game: fixed 60 Hz updates, then the scene draws into the small canvas, which is scaled up into the window.
-final class GameView: MTKView {
-    static let step = 1.0 / 60
-    let screen: Screen
-    let queue: MTLCommandQueue
-    var last = CACurrentMediaTime()
-    var lag = 0.0 // time not simulated yet
-    var frames = 0
-
-    init(resolution: Size) {
-        let device = MTLCreateSystemDefaultDevice()!
-        queue = device.makeCommandQueue()!
-        screen = Screen(size: resolution, device: device, format: .bgra8Unorm)
-        super.init(frame: .zero, device: device)
-        colorPixelFormat = .bgra8Unorm
-        colorspace = CGColorSpace(name: CGColorSpace.sRGB) // show asset colors exactly as they are in the PNG
-    }
-
-    required init(coder: NSCoder) { fatalError("GameView is created in code") }
-
-    override var acceptsFirstResponder: Bool { true }
-    override func keyDown(with event: NSEvent) { Input.keys.insert(Int(event.keyCode)) }
-    override func keyUp(with event: NSEvent) { Input.keys.remove(Int(event.keyCode)) }
-
-    override func draw(_ dirtyRect: NSRect) {
-        let now = CACurrentMediaTime()
-        var elapsed = now - last
-        last = now
-        if abs(elapsed - Self.step) < 0.002 { elapsed = Self.step } // absorb vsync jitter: one update per 60 Hz frame
-        lag = min(lag + elapsed, 0.25) // after a stall, slow down instead of running a burst of catch-up updates
-        while lag >= Self.step {
-            Input.poll()
-            Scene.current.update(Self.step)
-            lag -= Self.step
-        }
-        frames += 1
-        if frames % 15 == 0 { screen.reloadChangedAssets() } // 4 times a second
-
-        guard let drawable = currentDrawable, let window = currentRenderPassDescriptor,
-              let commands = queue.makeCommandBuffer() else { return }
-        let scene = Scene.current
-        let rgb = scene.background
-        let canvas = MTLRenderPassDescriptor()
-        canvas.colorAttachments[0].texture = screen.canvas
-        canvas.colorAttachments[0].loadAction = .clear
-        canvas.colorAttachments[0].clearColor = MTLClearColor(
-            red: Double(rgb >> 16 & 0xFF) / 255, green: Double(rgb >> 8 & 0xFF) / 255, blue: Double(rgb & 0xFF) / 255, alpha: 1)
-        screen.begin(commands, canvas)
-        scene.draw(screen)
-        screen.end()
-
-        screen.begin(commands, window)
-        screen.encoder.setViewport(letterbox(screen.size, in: drawableSize))
-        screen.quad(screen.canvas, x: 0, y: 0, source: Rect(x: 0, y: 0, width: screen.size.width, height: screen.size.height))
-        screen.end()
-
-        commands.present(drawable)
-        commands.commit()
-    }
-}
-
 /// The biggest whole-number scale of `canvas` that fits in `drawable` (at least 1x), centered.
 func letterbox(_ canvas: Size, in drawable: CGSize) -> MTLViewport {
     let (w, h) = (Int(drawable.width), Int(drawable.height))

@@ -1,4 +1,6 @@
 import AppKit
+import GameController
+import PixelKitProtocol
 
 /// A PixelKit game. Mark your conforming type `@main` and PixelKit opens a window and runs it.
 @MainActor public protocol Game {
@@ -38,6 +40,31 @@ public extension Game {
 
     static func main() {
         setvbuf(stdout, nil, _IOLBF, 0) // print() reaches the editor console line by line, not when a buffer fills
+        let game = Self()
+        Scene.current = game.start()
+        if let path = ProcessInfo.processInfo.environment[Message.environmentKey], let channel = Channel.connect(to: path) {
+            runInEditor(game.resolution, channel)
+        } else {
+            runInWindow(game.resolution)
+        }
+    }
+
+    /// Run by the editor: no window or Dock icon, the editor's preview shows the frames.
+    private static func runInEditor(_ size: Size, _ channel: Channel) {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
+        GCController.shouldMonitorBackgroundEvents = true // game controllers keep working while the editor is in front
+        let host = EditorHost(resolution: size, channel: channel)
+        channel.listen { message in
+            DispatchQueue.main.async { MainActor.assumeIsolated { host.handle(message) } }
+        } closed: {
+            exit(0) // the editor stopped us or went away
+        }
+        Timer.scheduledTimer(withTimeInterval: 1.0 / 60, repeats: true) { _ in MainActor.assumeIsolated { host.frame() } }
+        app.run()
+    }
+
+    private static func runInWindow(_ size: Size) {
         let app = NSApplication.shared
         app.setActivationPolicy(.regular) // ponytail: games run as bare executables for now; a bundle (Phase 7) makes this unnecessary
         let appMenu = NSMenu()
@@ -45,9 +72,6 @@ public extension Game {
         app.mainMenu = NSMenu()
         app.mainMenu!.addItem(withTitle: "", action: nil, keyEquivalent: "").submenu = appMenu
 
-        let game = Self()
-        let size = game.resolution
-        Scene.current = game.start()
         let view = GameView(resolution: size)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: size.width * 3, height: size.height * 3),
