@@ -1,3 +1,6 @@
+import Foundation
+import PixelKitProtocol
+
 /// A level, menu or screen: a tilemap plus the entities in it.
 @MainActor open class Scene {
     /// The scene on screen. Assign a new one to switch scenes, or a fresh copy to restart.
@@ -95,63 +98,82 @@
     }
 }
 
-/// A picture from `Assets/<image>.png`, cut into equal frames (left to right, then top to bottom).
+/// A picture from `Assets/<image>.png`. If `Assets/<image>.json` (written by the pixel editor) cuts it into frames,
+/// `play(_:)` runs one of its animations; without it, the whole image is one frame.
 public struct Sprite: Sendable {
     public var image: String
-    public var frameSize: Size
-    /// Assigning a different animation restarts it; assigning the same one every frame doesn't.
-    public var animation: Animation { didSet { if animation != oldValue { time = 0 } } }
+    /// The animation playing, by name; nil shows the first frame.
+    public private(set) var animation: String?
     /// Mirrors the sprite horizontally, e.g. to face left.
     public var flipped = false
     var time = 0.0
 
-    public init(_ image: String, frameSize: Size, animation: Animation = Animation(frames: [0], fps: 0)) {
-        self.image = image
-        self.frameSize = frameSize
-        self.animation = animation
-    }
+    public init(_ image: String) { self.image = image }
 
-    var frame: Int { animation.frames[Int(time * animation.fps) % animation.frames.count] }
-}
-
-public struct Animation: Sendable, Equatable {
-    public var frames: [Int]
-    public var fps: Double
-
-    public init(frames: [Int], fps: Double) {
-        precondition(!frames.isEmpty, "an animation needs at least one frame")
-        self.frames = frames
-        self.fps = fps
+    /// Starts the named animation. Playing the one that's already running keeps it going, so it's fine every frame.
+    public mutating func play(_ animation: String) {
+        if animation != self.animation { (self.animation, time) = (animation, 0) }
     }
 }
 
-/// A grid of tiles from `Assets/<image>.png` (cut into `tileSize` squares, numbered left to right, top to bottom).
+/// A grid of tiles from a tileset, `Assets/<tileset>.png`, cut into `tileSize` squares numbered left to right,
+/// then top to bottom.
 public struct Tilemap: Sendable {
-    public var image: String
+    public var tileset: String
     public var tileSize: Int
-    /// `cells[row][column]` is a tile number, or nil for empty.
-    public var cells: [[Int?]]
-    /// Tile numbers that block movement.
+    /// Size in tiles.
+    public var width: Int
+    public var height: Int
+    /// Each layer's tiles row by row, `layers[layer][row * width + column]`; nil is empty. The first layer draws first.
+    public var layers: [[Int?]]
+    /// Tile numbers that block movement, in any layer.
     public var solid: Set<Int>
 
-    /// Builds a map from text, one string per row. `legend` maps characters to tile numbers;
+    /// Loads `Assets/<name>.tilemap`, made in the tilemap editor. The tile size and which tiles are solid
+    /// come from the tileset's `.json`.
+    public init(_ name: String) {
+        let url = URL(fileURLWithPath: "Assets/\(name).tilemap")
+        do {
+            let map = try TilemapFile(contentsOf: url)
+            let sheet = try SheetFile(contentsOf: URL(fileURLWithPath: "Assets/\(map.tileset).json"))
+            (tileset, tileSize, width, height) = (map.tileset, sheet.frameWidth, map.width, map.height)
+            layers = map.layers.map { $0.tiles.map { $0 < 0 ? nil : $0 } }
+            solid = Set(sheet.solid ?? [])
+        } catch {
+            fatalError("PixelKit: can't load \(url.path): \(error.localizedDescription)")
+        }
+    }
+
+    /// Builds a one-layer map from text, one string per row. `legend` maps characters to tile numbers;
     /// any other character is empty. Every tile in the legend is solid unless you pass `solid`.
-    public init(_ image: String, tileSize: Int, rows: [String], legend: [Character: Int], solid: Set<Int>? = nil) {
-        self.image = image
-        self.tileSize = tileSize
-        cells = rows.map { $0.map { legend[$0] } }
+    public init(_ tileset: String, tileSize: Int, rows: [String], legend: [Character: Int], solid: Set<Int>? = nil) {
+        let width = rows.map(\.count).max() ?? 0
+        (self.tileset, self.tileSize, self.width, height) = (tileset, tileSize, width, rows.count)
+        layers = [rows.flatMap { row in row.map { legend[$0] } + Array(repeating: nil, count: width - row.count) }]
         self.solid = solid ?? Set(legend.values)
     }
 
     /// Size in pixels.
-    public var size: Size { Size((cells.map(\.count).max() ?? 0) * tileSize, cells.count * tileSize) }
+    public var size: Size { Size(width * tileSize, height * tileSize) }
 
-    /// Whether any solid tile overlaps `box`. Outside the map is empty.
+    /// Removes every `tile` from the map and returns where each one was (top-left corner, in pixels).
+    /// Handy for tiles that only mark where things go, like coins or the player's start.
+    public mutating func removeTiles(_ tile: Int) -> [Vector] {
+        var found: [Vector] = []
+        for layer in layers.indices {
+            for i in layers[layer].indices where layers[layer][i] == tile {
+                layers[layer][i] = nil
+                found.append([Double(i % width * tileSize), Double(i / width * tileSize)])
+            }
+        }
+        return found
+    }
+
+    /// Whether a solid tile in any layer overlaps `box`. Outside the map is empty.
     func isSolid(_ box: Rect) -> Bool {
-        for row in stride(from: cell(box.y), through: cell(box.y + box.height - 1), by: 1) where cells.indices.contains(row) {
-            for column in stride(from: cell(box.x), through: cell(box.x + box.width - 1), by: 1)
-            where cells[row].indices.contains(column) {
-                if let tile = cells[row][column], solid.contains(tile) { return true }
+        for row in stride(from: cell(box.y), through: cell(box.y + box.height - 1), by: 1) where (0..<height).contains(row) {
+            for column in stride(from: cell(box.x), through: cell(box.x + box.width - 1), by: 1) where (0..<width).contains(column) {
+                if layers.contains(where: { $0[row * width + column].map(solid.contains) ?? false }) { return true }
             }
         }
         return false

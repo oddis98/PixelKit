@@ -20,10 +20,10 @@ import Testing
     #expect(screen.texture("a").width == 24)
 
     try replace(with: Data(contentsOf: examples.appending(path: "slime.png")), secondsLater: 10) // 48 x 16
-    screen.reloadChangedTextures()
+    screen.reloadChangedAssets()
     #expect(screen.texture("a").width == 48)
 
     try replace(with: Data("not a png".utf8), secondsLater: 20)
-    screen.reloadChangedTextures()
+    screen.reloadChangedAssets()
     #expect(screen.texture("a").width == 48)
 }

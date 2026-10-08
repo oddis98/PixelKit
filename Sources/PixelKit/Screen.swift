@@ -1,4 +1,5 @@
 import MetalKit
+import PixelKitProtocol
 
 /// The pixel canvas your game draws on. (0, 0) is the top-left pixel.
 @MainActor public final class Screen {
@@ -8,7 +9,9 @@ import MetalKit
     let canvas: MTLTexture
     let loader: MTKTextureLoader
     var textures: [String: MTLTexture] = [:]
-    var modified: [String: Date?] = [:] // each loaded PNG's modification date, to spot edits
+    var sheets: [String: SheetFile?] = [:] // nil: the image has no .json, so it's a single frame
+    var modified: [String: Date?] = [:] // each loaded file's modification date, to spot edits
+    var warned: Set<String> = []
     var encoder: MTLRenderCommandEncoder!
     var vertices: [SIMD4<Float>] = [] // queued quads, all using `batchTexture`
     var batchTexture: MTLTexture?
@@ -48,17 +51,27 @@ import MetalKit
     /// Draws the sprite's current frame with its top-left corner at (x, y), snapped to whole pixels.
     public func draw(_ sprite: Sprite, x: Double, y: Double) {
         let texture = texture(sprite.image)
-        quad(texture, x: x, y: y, source: region(sprite.frame, sprite.frameSize, in: texture), flip: sprite.flipped)
+        let sheet = sheet(sprite.image)
+        let size = Size(sheet?.frameWidth ?? texture.width, sheet?.frameHeight ?? texture.height)
+        var frame = 0
+        if let name = sprite.animation {
+            if let animation = sheet?.animations?[name], !animation.frames.isEmpty {
+                frame = animation.frames[Int(sprite.time * animation.fps) % animation.frames.count]
+            } else if warned.insert("\(sprite.image) \(name)").inserted {
+                print("PixelKit: \(sprite.image).json has no animation \"\(name)\"")
+            }
+        }
+        quad(texture, x: x, y: y, source: region(frame, size, in: texture), flip: sprite.flipped)
     }
 
     // ponytail: draws every tile; cull to the camera when maps get big
     public func draw(_ map: Tilemap) {
-        let texture = texture(map.image)
+        let texture = texture(map.tileset)
         let tile = Size(map.tileSize, map.tileSize)
-        for (row, cells) in map.cells.enumerated() {
-            for (column, cell) in cells.enumerated() {
+        for layer in map.layers {
+            for (i, cell) in layer.enumerated() {
                 guard let cell else { continue }
-                let (x, y) = (Double(column * map.tileSize), Double(row * map.tileSize))
+                let (x, y) = (Double(i % map.width * map.tileSize), Double(i / map.width * map.tileSize))
                 quad(texture, x: x, y: y, source: region(cell, tile, in: texture))
             }
         }
@@ -72,30 +85,48 @@ import MetalKit
 
     func texture(_ name: String) -> MTLTexture {
         if let texture = textures[name] { return texture }
-        let url = assetURL(name)
+        let url = assetURL("\(name).png")
         do {
             let texture = try loader.newTexture(URL: url, options: [.SRGB: false])
             textures[name] = texture
-            modified[name] = modificationDate(url)
+            modified["\(name).png"] = modificationDate(url)
             return texture
         } catch {
             fatalError("PixelKit: can't load \(url.path): \(error.localizedDescription)")
         }
     }
 
-    /// Reloads textures whose PNG changed on disk, e.g. saved by the pixel editor.
-    /// If the new file can't be read (deleted, half-written), the old texture stays.
-    func reloadChangedTextures() {
-        for (name, date) in modified {
-            let url = assetURL(name)
+    /// How an image is cut into frames, from its `.json`; nil if it has none.
+    func sheet(_ name: String) -> SheetFile? {
+        if let sheet = sheets[name] { return sheet }
+        let url = assetURL("\(name).json")
+        var sheet: SheetFile?
+        if FileManager.default.fileExists(atPath: url.path) {
+            do { sheet = try SheetFile(contentsOf: url) } catch { print("PixelKit: can't read \(url.path): \(error.localizedDescription)") }
+        }
+        sheets[name] = .some(sheet)
+        modified["\(name).json"] = modificationDate(url)
+        return sheet
+    }
+
+    /// Reloads images and their `.json` files that changed on disk, e.g. saved by the editor.
+    /// An image that can't be read (deleted, half-written) keeps its old texture.
+    func reloadChangedAssets() {
+        for (file, date) in modified {
+            let url = assetURL(file)
             guard modificationDate(url) != date else { continue }
-            modified[name] = modificationDate(url)
-            if let texture = try? loader.newTexture(URL: url, options: [.SRGB: false]) { textures[name] = texture }
+            modified[file] = modificationDate(url)
+            let name = (file as NSString).deletingPathExtension
+            if file.hasSuffix(".json") {
+                sheets[name] = nil // read again on next use
+            } else if let texture = try? loader.newTexture(URL: url, options: [.SRGB: false]) {
+                textures[name] = texture
+            }
         }
     }
 
     // ponytail: reads from the project folder (the editor runs games there); bundle assets on export (Phase 7)
-    func assetURL(_ name: String) -> URL { URL(fileURLWithPath: "Assets/\(name).png") }
+    func assetURL(_ file: String) -> URL { URL(fileURLWithPath: "Assets/\(file)") }
 
     func modificationDate(_ url: URL) -> Date? {
         try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
@@ -177,7 +208,7 @@ final class GameView: MTKView {
             lag -= Self.step
         }
         frames += 1
-        if frames % 15 == 0 { screen.reloadChangedTextures() } // 4 times a second
+        if frames % 15 == 0 { screen.reloadChangedAssets() } // 4 times a second
 
         guard let drawable = currentDrawable, let window = currentRenderPassDescriptor,
               let commands = queue.makeCommandBuffer() else { return }

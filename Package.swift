@@ -6,7 +6,9 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [.library(name: "PixelKit", targets: ["PixelKit"])],
     targets: [
-        .target(name: "PixelKit"),
+        .target(name: "PixelKit", dependencies: ["PixelKitProtocol"]),
+        // File formats the editor writes and games read.
+        .target(name: "PixelKitProtocol"),
         .testTarget(name: "PixelKitTests", dependencies: ["PixelKit"]),
     ]
 )
