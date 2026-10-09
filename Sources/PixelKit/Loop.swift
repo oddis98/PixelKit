@@ -119,6 +119,7 @@ final class GameView: MTKView {
         case .pause: loop.paused = true
         case .resume: loop.paused = false
         case .step: loop.steps += 1
+        case let .reload(path): print(Reloader.load(path)) // shows in the editor's console
         case .frame: break
         }
     }

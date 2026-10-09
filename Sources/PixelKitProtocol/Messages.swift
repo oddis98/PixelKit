@@ -10,6 +10,8 @@ public enum Message: Equatable, Sendable {
     case keys([Int])
     /// Editor to game: stop updating, carry on, or run one update while paused.
     case pause, resume, step
+    /// Editor to game: a library with the game's recompiled code, to switch to without restarting.
+    case reload(String)
 
     public static let environmentKey = "PIXELKIT_EDITOR"
 }
@@ -32,6 +34,9 @@ extension Message {
         case .pause: tag = 3
         case .resume: tag = 4
         case .step: tag = 5
+        case let .reload(path):
+            tag = 6
+            payload.append(Data(path.utf8))
         }
         var data = Data()
         withUnsafeBytes(of: UInt32(payload.count + 1).littleEndian) { data.append(contentsOf: $0) }
@@ -64,6 +69,7 @@ extension Message {
         case 3: self = .pause
         case 4: self = .resume
         case 5: self = .step
+        case 6: self = .reload(String(decoding: payload, as: UTF8.self))
         default: return nil
         }
     }
