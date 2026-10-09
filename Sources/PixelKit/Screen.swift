@@ -125,8 +125,6 @@ import PixelKitProtocol
         }
     }
 
-    // ponytail: reads from the project folder (the editor runs games there); bundle assets on export (Phase 7)
-    func assetURL(_ file: String) -> URL { URL(fileURLWithPath: "Assets/\(file)") }
 
     func modificationDate(_ url: URL) -> Date? {
         try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
@@ -200,3 +198,12 @@ fragment float4 spriteFragment(Vertex in [[stage_in]], texture2d<float> t [[text
     return t.sample(nearest, in.uv);
 }
 """
+
+/// Where a game file is: inside the app once the game has been exported, otherwise in `Assets/` of the folder the
+/// game runs in (the editor runs games in their project folder).
+func assetURL(_ file: String) -> URL {
+    if let bundledAssets { return bundledAssets.appending(path: file) }
+    return URL(fileURLWithPath: "Assets/\(file)")
+}
+
+private let bundledAssets = Bundle.main.url(forResource: "Assets", withExtension: nil)

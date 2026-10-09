@@ -132,10 +132,10 @@ public struct Tilemap: Sendable {
     /// Loads `Assets/<name>.tilemap`, made in the tilemap editor. The tile size and which tiles are solid
     /// come from the tileset's `.json`.
     public init(_ name: String) {
-        let url = URL(fileURLWithPath: "Assets/\(name).tilemap")
+        let url = assetURL("\(name).tilemap")
         do {
             let map = try TilemapFile(contentsOf: url)
-            let sheet = try SheetFile(contentsOf: URL(fileURLWithPath: "Assets/\(map.tileset).json"))
+            let sheet = try SheetFile(contentsOf: assetURL("\(map.tileset).json"))
             (tileset, tileSize, width, height) = (map.tileset, sheet.frameWidth, map.width, map.height)
             layers = map.layers.map { $0.tiles.map { $0 < 0 ? nil : $0 } }
             solid = Set(sheet.solid ?? [])

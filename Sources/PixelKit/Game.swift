@@ -66,7 +66,7 @@ public extension Game {
 
     private static func runInWindow(_ size: Size) {
         let app = NSApplication.shared
-        app.setActivationPolicy(.regular) // ponytail: games run as bare executables for now; a bundle (Phase 7) makes this unnecessary
+        app.setActivationPolicy(.regular) // the editor runs games as bare executables, which need this; harmless in an app
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "Quit \(Self.self)", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         app.mainMenu = NSMenu()

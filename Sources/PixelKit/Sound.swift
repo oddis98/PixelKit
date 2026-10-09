@@ -7,7 +7,7 @@ import AVFoundation
     // ponytail: one AVAudioPlayer per play; move to AVAudioEngine for music, looping or lower latency
     public static func play(_ name: String) {
         playing.removeAll { !$0.isPlaying }
-        let url = URL(fileURLWithPath: "Assets/\(name).wav")
+        let url = assetURL("\(name).wav")
         do {
             let player = try AVAudioPlayer(contentsOf: url)
             player.play()
