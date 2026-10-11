@@ -47,7 +47,9 @@ Next, give it a sprite: put a PNG in `Assets/` (say `Assets/player.png`), and ad
 swift run Editor
 ```
 
-New Game (⌘N) writes a starter game that gets PixelKit from this repo on GitHub. To bundle the editor as an app:
+New Game (⌘N) writes a starter game that gets PixelKit from this repo on GitHub. Export App… makes it a Mac app, whose icon is the game's `Assets/AppIcon.png` if it has one: square pixel art, drawn right to the edges, since macOS rounds the corners.
+
+To bundle the editor as an app:
 
 ```bash
 BUNDLE_ID=app.pixelkit.editor CATEGORY=public.app-category.developer-tools scripts/make-app.sh . "PixelKit Editor.app" Editor
