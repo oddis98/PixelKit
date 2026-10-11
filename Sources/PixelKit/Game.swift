@@ -1,8 +1,13 @@
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import GameController
 import PixelKitProtocol
 
-/// A PixelKit game. Mark your conforming type `@main` and PixelKit opens a window and runs it.
+/// A PixelKit game. Mark your conforming type `@main` and PixelKit opens a window and runs it (on iOS, the app's
+/// screen, with touch controls over it).
 @MainActor public protocol Game {
     init()
     /// Size of the pixel canvas. The window scales it up by whole numbers so pixels stay square and crisp.
@@ -42,12 +47,18 @@ public extension Game {
         setvbuf(stdout, nil, _IOLBF, 0) // print() reaches the editor console line by line, not when a buffer fills
         let game = Self()
         Scene.current = game.start()
+        #if os(macOS)
         if let path = ProcessInfo.processInfo.environment[Message.environmentKey], let channel = Channel.connect(to: path) {
             runInEditor(game.resolution, channel)
         } else {
             runInWindow(game.resolution)
         }
+        #else
+        GameApp.resolution = game.resolution
+        _ = UIApplicationMain(CommandLine.argc, CommandLine.unsafeArgv, nil, NSStringFromClass(GameApp.self))
+        #endif
     }
+    #if os(macOS)
 
     /// Run by the editor: no window or Dock icon, the editor's preview shows the frames.
     private static func runInEditor(_ size: Size, _ channel: Channel) {
@@ -92,4 +103,5 @@ public extension Game {
         app.activate()
         withExtendedLifetime(window) { app.run() }
     }
+    #endif
 }

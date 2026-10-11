@@ -59,7 +59,7 @@ import PixelKitProtocol
     }
 }
 
-/// Shows the game in its own window: the canvas scaled up by whole numbers.
+/// Shows the game in its own window (or on iOS, the app's screen): the canvas scaled up by whole numbers.
 final class GameView: MTKView {
     let loop: Loop
 
@@ -68,16 +68,20 @@ final class GameView: MTKView {
         loop = Loop(resolution: resolution, device: device)
         super.init(frame: .zero, device: device)
         colorPixelFormat = .bgra8Unorm
+        #if os(macOS)
         colorspace = CGColorSpace(name: CGColorSpace.sRGB) // show asset colors exactly as they are in the PNG
+        #endif
     }
 
     required init(coder: NSCoder) { fatalError("GameView is created in code") }
 
+    #if os(macOS)
     override var acceptsFirstResponder: Bool { true }
     override func keyDown(with event: NSEvent) { Input.keys.insert(Int(event.keyCode)) }
     override func keyUp(with event: NSEvent) { Input.keys.remove(Int(event.keyCode)) }
+    #endif
 
-    override func draw(_ dirtyRect: NSRect) {
+    override func draw(_ dirtyRect: CGRect) {
         guard let drawable = currentDrawable, let window = currentRenderPassDescriptor, let commands = loop.tick() else { return }
         let screen = loop.screen
         screen.begin(commands, window)
@@ -89,6 +93,7 @@ final class GameView: MTKView {
     }
 }
 
+#if os(macOS)
 /// Runs the game without a window and sends every frame to the editor that launched it, which shows it in its
 /// preview. Keys pressed in the preview, and pause and step, come back the same way.
 @MainActor final class EditorHost {
@@ -127,3 +132,4 @@ final class GameView: MTKView {
         }
     }
 }
+#endif

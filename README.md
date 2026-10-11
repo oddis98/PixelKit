@@ -61,6 +61,18 @@ To work on the engine itself, start the editor with `PIXELKIT_LOCAL` set to your
 PIXELKIT_LOCAL="$PWD" swift run Editor
 ```
 
+## iPhone and iPad
+
+Games run in the iOS Simulator too, with a D-pad and A and B buttons drawn over the game; game controllers and iPad keyboards work as well. Add `.iOS(.v18)` to your game's `platforms`, then, from this repo:
+
+```bash
+scripts/make-ios-app.sh path/to/MyGame MyGame.app
+```
+
+```bash
+xcrun simctl install booted MyGame.app && xcrun simctl launch booted games.pixelkit.MyGame
+```
+
 ## More
 
 - [ROADMAP.md](ROADMAP.md): how PixelKit works and what's done

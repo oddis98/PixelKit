@@ -58,7 +58,15 @@ func soundURL(_ name: String) -> URL? {
     ["wav", "m4a", "mp3", "caf"].lazy.map { assetURL("\(name).\($0)") }.first { FileManager.default.fileExists(atPath: $0.path) }
 }
 
+#if os(iOS)
+/// Sounds mix with other apps' audio, and the silent switch mutes them. Set before the first sound or track plays.
+private let audioSession: Void = { try? AVAudioSession.sharedInstance().setCategory(.ambient) }()
+#endif
+
 func audioPlayer(_ name: String) -> AVAudioPlayer {
+    #if os(iOS)
+    _ = audioSession
+    #endif
     guard let url = soundURL(name) else { fatalError("PixelKit: there's no Assets/\(name).wav, .m4a, .mp3 or .caf") }
     do {
         return try AVAudioPlayer(contentsOf: url)

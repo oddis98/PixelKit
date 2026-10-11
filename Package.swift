@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "PixelKit",
-    platforms: [.macOS(.v15)],
+    platforms: [.macOS(.v15), .iOS(.v18)],
     products: [.library(name: "PixelKit", targets: ["PixelKit"])],
     targets: [
         .target(name: "PixelKit", dependencies: ["PixelKitProtocol"]),

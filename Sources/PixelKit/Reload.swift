@@ -1,3 +1,4 @@
+#if os(macOS) // the editor, and so hot reload, is Mac-only
 import Foundation
 import MachO
 import ObjectiveC
@@ -94,3 +95,4 @@ import ObjectiveC
         return (0..<Int(count)).map { "\(ivar_getName(list[$0]).map { String(cString: $0) } ?? "?")@\(ivar_getOffset(list[$0]))" }
     }
 }
+#endif
