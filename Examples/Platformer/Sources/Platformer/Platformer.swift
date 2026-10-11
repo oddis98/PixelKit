@@ -7,6 +7,7 @@ import PixelKit
 final class Level: Scene {
     let player = Player()
     var coins = 0
+    var total = 0
 
     override init() {
         super.init()
@@ -14,8 +15,12 @@ final class Level: Scene {
         // Made in the tilemap editor. Tiles 3 and 4 only mark where coins and the player go.
         var map = Tilemap("level1")
         for position in map.removeTiles(4) { add(player, at: position) }
-        for position in map.removeTiles(3) { add(Coin(), at: position) }
+        for position in map.removeTiles(3) {
+            add(Coin(), at: position)
+            total += 1
+        }
         tilemap = map
+        Music.play("theme") // already on when the level restarts, so it keeps going
     }
 
     override func update(_ dt: Double) {
@@ -28,7 +33,9 @@ final class Level: Scene {
 
     override func draw(_ screen: Screen) {
         super.draw(screen)
-        for i in 0..<coins { screen.draw(Sprite("coin"), x: Double(4 + i * 9), y: 4) }
+        let score = "COINS \(coins)/\(total)"
+        screen.text(score, x: 5, y: 5, color: 0x1D2B53) // a shadow, so the text stands out against the sky
+        screen.text(score, x: 4, y: 4)
     }
 }
 

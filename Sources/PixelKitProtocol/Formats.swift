@@ -16,8 +16,8 @@ public extension AssetFile {
     }
 }
 
-/// How `Assets/<image>.png` is cut up, stored in `Assets/<image>.json`: into frames for animations, or into tiles
-/// when the image is a tileset. Frames are numbered left to right, then top to bottom.
+/// How `Assets/<image>.png` is cut up, stored in `Assets/<image>.json`: into frames for animations, into tiles
+/// when the image is a tileset, or into glyphs when it's a font. Frames are numbered left to right, then top to bottom.
 public struct SheetFile: AssetFile, Equatable, Sendable {
     public var frameWidth: Int
     public var frameHeight: Int
@@ -25,6 +25,8 @@ public struct SheetFile: AssetFile, Equatable, Sendable {
     public var animations: [String: Animation]?
     /// Tilesets only: tile numbers that block movement.
     public var solid: [Int]?
+    /// Fonts only: the characters the frames show, in order.
+    public var characters: String?
 
     public struct Animation: Codable, Equatable, Sendable {
         public var frames: [Int]
@@ -36,11 +38,12 @@ public struct SheetFile: AssetFile, Equatable, Sendable {
         }
     }
 
-    public init(frameWidth: Int, frameHeight: Int, animations: [String: Animation]? = nil, solid: [Int]? = nil) {
+    public init(frameWidth: Int, frameHeight: Int, animations: [String: Animation]? = nil, solid: [Int]? = nil, characters: String? = nil) {
         self.frameWidth = frameWidth
         self.frameHeight = frameHeight
         self.animations = animations
         self.solid = solid
+        self.characters = characters
     }
 }
 

@@ -13,8 +13,10 @@ import PixelKitProtocol
     var modified: [String: Date?] = [:] // each loaded file's modification date, to spot edits
     var warned: Set<String> = []
     var encoder: MTLRenderCommandEncoder!
-    var vertices: [SIMD4<Float>] = [] // queued quads, all using `batchTexture`
+    var vertices: [SIMD8<Float>] = [] // queued quads, all using `batchTexture`: x, y, u, v, then the tint r, g, b, a
     var batchTexture: MTLTexture?
+    /// The built-in font's glyphs, made on first use.
+    lazy var builtInFont = Font.builtInTexture(device)
     /// Subtracted from every position; the scene sets it to its camera.
     var offset = Vector.zero
 
@@ -125,13 +127,9 @@ import PixelKitProtocol
         }
     }
 
-
-    func modificationDate(_ url: URL) -> Date? {
-        try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
-    }
-
-    /// Queues a textured quad. Consecutive quads with the same texture reach the GPU as one draw call.
-    func quad(_ texture: MTLTexture, x: Double, y: Double, source s: Rect, flip: Bool = false) {
+    /// Queues a textured quad, its pixels multiplied by `color`. Consecutive quads with the same texture reach the GPU
+    /// as one draw call.
+    func quad(_ texture: MTLTexture, x: Double, y: Double, source s: Rect, flip: Bool = false, color: SIMD4<Float> = .one) {
         if texture !== batchTexture {
             flush()
             batchTexture = texture
@@ -142,12 +140,13 @@ import PixelKitProtocol
         var (u0, u1) = (Float(s.x) / w, Float(s.x + s.width) / w)
         let (v0, v1) = (Float(s.y) / h, Float(s.y + s.height) / h)
         if flip { swap(&u0, &u1) }
-        vertices += [[x0, y0, u0, v0], [x1, y0, u1, v0], [x0, y1, u0, v1], [x1, y0, u1, v0], [x1, y1, u1, v1], [x0, y1, u0, v1]]
+        let corners: [SIMD4<Float>] = [[x0, y0, u0, v0], [x1, y0, u1, v0], [x0, y1, u0, v1], [x1, y0, u1, v0], [x1, y1, u1, v1], [x0, y1, u0, v1]]
+        vertices += corners.map { SIMD8(lowHalf: $0, highHalf: color) }
     }
 
     func flush() {
         if let batchTexture, !vertices.isEmpty {
-            let buffer = device.makeBuffer(bytes: vertices, length: vertices.count * MemoryLayout<SIMD4<Float>>.stride)
+            let buffer = device.makeBuffer(bytes: vertices, length: vertices.count * MemoryLayout<SIMD8<Float>>.stride)
             encoder.setVertexBuffer(buffer, offset: 0, index: 0)
             encoder.setFragmentTexture(batchTexture, index: 0)
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertices.count)
@@ -185,17 +184,19 @@ let shaders = """
 #include <metal_stdlib>
 using namespace metal;
 
-struct Vertex { float4 position [[position]]; float2 uv; };
+struct Vertex { float4 position [[position]]; float2 uv; float4 color [[flat]]; };
 
-// v: x, y in canvas pixels (y down) + u, v texture coords.
-vertex Vertex spriteVertex(uint i [[vertex_id]], constant float4 *v [[buffer(0)]], constant float2 &size [[buffer(1)]]) {
-    float2 p = v[i].xy / size * 2 - 1;
-    return { float4(p.x, -p.y, 0, 1), v[i].zw };
+// As Screen.quad writes them: x, y in canvas pixels (y down) and u, v texture coords, then the color to multiply by.
+struct Corner { float4 xyuv; float4 color; };
+
+vertex Vertex spriteVertex(uint i [[vertex_id]], constant Corner *v [[buffer(0)]], constant float2 &size [[buffer(1)]]) {
+    float2 p = v[i].xyuv.xy / size * 2 - 1;
+    return { float4(p.x, -p.y, 0, 1), v[i].xyuv.zw, v[i].color };
 }
 
 fragment float4 spriteFragment(Vertex in [[stage_in]], texture2d<float> t [[texture(0)]]) {
     constexpr sampler nearest(filter::nearest);
-    return t.sample(nearest, in.uv);
+    return t.sample(nearest, in.uv) * in.color;
 }
 """
 
@@ -207,3 +208,7 @@ func assetURL(_ file: String) -> URL {
 }
 
 private let bundledAssets = Bundle.main.url(forResource: "Assets", withExtension: nil)
+
+func modificationDate(_ url: URL) -> Date? {
+    try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
+}

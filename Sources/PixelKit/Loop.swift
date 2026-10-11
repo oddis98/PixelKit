@@ -34,7 +34,10 @@ import PixelKitProtocol
             }
         }
         frames += 1
-        if frames % 15 == 0 { screen.reloadChangedAssets() } // 4 times a second
+        if frames % 15 == 0 { // 4 times a second
+            screen.reloadChangedAssets()
+            Music.restartIfChanged()
+        }
 
         guard let commands = queue.makeCommandBuffer() else { return nil }
         let scene = Scene.current
