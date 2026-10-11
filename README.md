@@ -47,6 +47,8 @@ Next, give it a sprite: put a PNG in `Assets/` (say `Assets/player.png`), and ad
 swift run Editor
 ```
 
+The code editor uses your Xcode theme, light and dark, and colors names the way Xcode does: your game's own in the project colors, PixelKit's and Apple's in the others.
+
 New Game (⌘N) writes a starter game that gets PixelKit from this repo on GitHub. Export App… makes it a Mac app, whose icon is the game's `Assets/AppIcon.png` if it has one: square pixel art, drawn right to the edges, since macOS rounds the corners.
 
 To bundle the editor as an app:
