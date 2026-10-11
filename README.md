@@ -63,7 +63,7 @@ PIXELKIT_LOCAL="$PWD" swift run Editor
 
 ## iPhone and iPad
 
-Games run in the iOS Simulator too, with a D-pad and A and B buttons drawn over the game; game controllers and iPad keyboards work as well. Add `.iOS(.v18)` to your game's `platforms`, then, from this repo:
+Games run in the iOS Simulator too, with a D-pad and A and B buttons drawn over the game; game controllers and iPad keyboards work as well. Add `.iOS(.v18)` to your game's `platforms` (New Game does), then click Run on iPhone Simulator in the editor. Or, from this repo:
 
 ```bash
 scripts/make-ios-app.sh path/to/MyGame MyGame.app
