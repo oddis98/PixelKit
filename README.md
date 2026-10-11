@@ -51,6 +51,8 @@ The code editor uses your Xcode theme, light and dark, and colors names the way 
 
 It edits and navigates like Xcode too: completions with placeholders you Tab between, Quick Help (⌥-click), Open Quickly (⇧⌘O), Go Back and Forward (⌃⌘← ⌃⌘→), the Issue navigator (⌘5, and ⌘' for the next issue), and Editor ▸ Structure's shortcuts (⌘/ ⌘[ ⌘] ⌥⌘[ ⌥⌘] ⌃I).
 
+And it runs like Xcode: pick My Mac or an iPhone simulator in the middle of the toolbar and press ⌘R. The activity view beside it shows the build's progress and its errors and warnings, which open the Issue navigator. While a game runs on the Mac, ⌘R switches it to your latest code and keeps its state. The console shows the game's output, or the build log. Product ▸ Clean Build Folder (⇧⌘K) starts the next build from scratch.
+
 New Game (⌘N) writes a starter game that gets PixelKit from this repo on GitHub. Export App… makes it a Mac app, whose icon is the game's `Assets/AppIcon.png` if it has one: square pixel art, drawn right to the edges, since macOS rounds the corners.
 
 To bundle the editor as an app:
@@ -67,7 +69,7 @@ PIXELKIT_LOCAL="$PWD" swift run Editor
 
 ## iPhone and iPad
 
-Games run in the iOS Simulator too, with a D-pad and A and B buttons drawn over the game; game controllers and iPad keyboards work as well. Add `.iOS(.v18)` to your game's `platforms` (New Game does), then click Run on iPhone Simulator in the editor. Or, from this repo:
+Games run in the iOS Simulator too, with a D-pad and A and B buttons drawn over the game; game controllers and iPad keyboards work as well. Add `.iOS(.v18)` to your game's `platforms` (New Game does), then choose an iPhone simulator in the editor's toolbar and press ⌘R. Or, from this repo:
 
 ```bash
 scripts/make-ios-app.sh path/to/MyGame MyGame.app
