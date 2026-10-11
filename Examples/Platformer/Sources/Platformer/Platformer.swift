@@ -12,10 +12,10 @@ final class Level: Scene {
     override init() {
         super.init()
         background = 0x29ADFF
-        // Made in the tilemap editor. Tiles 3 and 4 only mark where coins and the player go.
-        var map = Tilemap("level1")
-        for position in map.removeTiles(4) { add(player, at: position) }
-        for position in map.removeTiles(3) {
+        // Made in the tilemap editor, with objects that say where the player starts and where the coins are.
+        let map = Tilemap("level1")
+        for position in map.objects(named: "player") { add(player, at: position) }
+        for position in map.objects(named: "coin") {
             add(Coin(), at: position)
             total += 1
         }

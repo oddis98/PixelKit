@@ -56,6 +56,8 @@ public struct TilemapFile: AssetFile, Equatable, Sendable {
     public var height: Int
     /// The first layer draws first.
     public var layers: [Layer]
+    /// Things placed in the level, like coins or where the player starts.
+    public var objects: [Object]?
 
     public struct Layer: Codable, Equatable, Sendable {
         public var name: String
@@ -68,10 +70,24 @@ public struct TilemapFile: AssetFile, Equatable, Sendable {
         }
     }
 
-    public init(tileset: String, width: Int, height: Int, layers: [Layer]) {
+    public struct Object: Codable, Equatable, Sendable {
+        public var name: String
+        /// Top-left corner, in pixels.
+        public var x: Int
+        public var y: Int
+        /// Settings for the game, like "speed": "40".
+        public var properties: [String: String]?
+
+        public init(name: String, x: Int, y: Int, properties: [String: String]? = nil) {
+            (self.name, self.x, self.y, self.properties) = (name, x, y, properties)
+        }
+    }
+
+    public init(tileset: String, width: Int, height: Int, layers: [Layer], objects: [Object]? = nil) {
         self.tileset = tileset
         self.width = width
         self.height = height
         self.layers = layers
+        self.objects = objects
     }
 }

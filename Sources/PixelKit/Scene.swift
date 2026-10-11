@@ -128,6 +128,16 @@ public struct Tilemap: Sendable {
     public var layers: [[Int?]]
     /// Tile numbers that block movement, in any layer.
     public var solid: Set<Int>
+    /// Things placed in the level with the map editor's Objects tool, like coins or where the player starts.
+    public var objects: [Object] = []
+
+    public struct Object: Sendable {
+        public var name: String
+        /// Top-left corner, in pixels.
+        public var position: Vector
+        /// Settings typed for it, like "speed": "40".
+        public var properties: [String: String]
+    }
 
     /// Loads `Assets/<name>.tilemap`, made in the tilemap editor. The tile size and which tiles are solid
     /// come from the tileset's `.json`.
@@ -139,6 +149,7 @@ public struct Tilemap: Sendable {
             (tileset, tileSize, width, height) = (map.tileset, sheet.frameWidth, map.width, map.height)
             layers = map.layers.map { $0.tiles.map { $0 < 0 ? nil : $0 } }
             solid = Set(sheet.solid ?? [])
+            objects = (map.objects ?? []).map { Object(name: $0.name, position: [Double($0.x), Double($0.y)], properties: $0.properties ?? [:]) }
         } catch {
             fatalError("PixelKit: can't load \(url.path): \(error.localizedDescription)")
         }
@@ -155,6 +166,9 @@ public struct Tilemap: Sendable {
 
     /// Size in pixels.
     public var size: Size { Size(width * tileSize, height * tileSize) }
+
+    /// Where each object called `name` is (its top-left corner, in pixels).
+    public func objects(named name: String) -> [Vector] { objects.filter { $0.name == name }.map(\.position) }
 
     /// Removes every `tile` from the map and returns where each one was (top-left corner, in pixels).
     /// Handy for tiles that only mark where things go, like coins or the player's start.
