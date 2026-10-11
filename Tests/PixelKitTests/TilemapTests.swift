@@ -1,4 +1,5 @@
 import Foundation
+import Metal
 import PixelKitProtocol
 import Testing
 @testable import PixelKit
@@ -61,4 +62,20 @@ import Testing
     try Data("{".utf8).write(to: assets.appending(path: "level.tilemap")) // can't be read: the map stays
     map.reloadIfChanged()
     #expect(map.layers == [[nil, 1]])
+}
+
+@MainActor @Test func mapsQueueOnlyTheTilesInView() throws {
+    let screen = Screen(size: Size(16, 16), device: try #require(MTLCreateSystemDefaultDevice()), format: .bgra8Unorm)
+    screen.textures["tiles"] = screen.builtInFont // any image does as a tileset
+    let map = Tilemap("tiles", tileSize: 8, rows: Array(repeating: "#####", count: 3), legend: ["#": 0]) // 5x3 tiles on a 2x2-tile canvas
+    func tiles(at camera: Vector) -> Int {
+        (screen.offset, screen.vertices) = (camera, [])
+        screen.draw(map)
+        return screen.vertices.count / 6
+    }
+    #expect(tiles(at: [0, 0]) == 4)
+    #expect(tiles(at: [12, 4]) == 9) // between tiles: 3 columns and 3 rows show a part
+    #expect(screen.vertices[0][0] == -4 && screen.vertices[0][1] == -4) // the first, column 1 and row 0, half off the canvas
+    #expect(tiles(at: [-4, -4]) == 4 && tiles(at: [36, 20]) == 1) // past the top-left and bottom-right corners
+    #expect(tiles(at: [100, 0]) == 0)
 }

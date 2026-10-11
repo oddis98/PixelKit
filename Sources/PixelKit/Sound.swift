@@ -15,12 +15,16 @@ import AVFoundation
     }
 }
 
-/// Background music: one track at a time, looping. It keeps playing through scene changes and code reloads, and
-/// starts over when its file changes.
+/// Background music: one track at a time, looping. It keeps playing through scene changes and code reloads, pauses
+/// with the game in the editor, and starts over when its file changes.
 @MainActor public enum Music {
     static var player: AVAudioPlayer?
     static var track: String?
     static var modified: Date? // of the track's file when it started
+    /// While the game is paused, the track holds its place, and one that starts meanwhile waits.
+    static var paused = false {
+        didSet { if paused { player?.pause() } else { player?.play() } }
+    }
 
     /// Loops `Assets/<name>` (.wav, .m4a, .mp3 or .caf). Playing the track that's already on keeps it going, so a
     /// scene can call this every time it starts.
@@ -50,7 +54,7 @@ import AVFoundation
         player?.stop()
         new.numberOfLoops = -1
         new.volume = Float(volume)
-        new.play()
+        if !paused { new.play() }
         (player, track, modified) = (new, name, new.url.flatMap(modificationDate))
     }
 }

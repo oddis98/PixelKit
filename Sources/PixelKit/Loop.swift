@@ -9,7 +9,9 @@ import PixelKitProtocol
     var last = CACurrentMediaTime()
     var lag = 0.0 // time not simulated yet
     var frames = 0
-    var paused = false
+    var paused = false {
+        didSet { Music.paused = paused }
+    }
     var steps = 0 // updates to run while paused
 
     init(resolution: Size, device: MTLDevice) {

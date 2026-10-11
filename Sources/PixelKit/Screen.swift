@@ -10,6 +10,7 @@ import PixelKitProtocol
     let loader: MTKTextureLoader
     var textures: [String: MTLTexture] = [:]
     var sheets: [String: SheetFile?] = [:] // nil: the image has no .json, so it's a single frame
+    var fonts: [String: Font] = [:] // image fonts, measured on first use
     var modified: [String: Date?] = [:] // each loaded file's modification date, to spot edits
     var warned: Set<String> = []
     var encoder: MTLRenderCommandEncoder!
@@ -63,19 +64,23 @@ import PixelKitProtocol
                 print("PixelKit: \(sprite.image).json has no animation \"\(name)\"")
             }
         }
-        quad(texture, x: x, y: y, source: region(frame, size, in: texture), flip: sprite.flipped)
+        quad(texture, x: x, y: y, source: region(frame, size, in: texture), flip: sprite.flipped, color: sprite.color)
     }
 
-    /// Draws the tilemap's layers, first to last. `Scene` draws its `tilemap` this way.
-    // ponytail: draws every tile; cull to the camera when maps get big
+    /// Draws the tilemap's layers, first to last: only the tiles on the canvas, so levels can be many screens big.
+    /// `Scene` draws its `tilemap` this way.
     public func draw(_ map: Tilemap) {
         let texture = texture(map.tileset)
         let tile = Size(map.tileSize, map.tileSize)
+        let (left, top) = (Int(offset.x.rounded(.up)), Int(offset.y.rounded(.up))) // the world pixel `quad` puts in the canvas's corner
+        let columns = stride(from: max(map.cell(left), 0), through: min(map.cell(left + size.width - 1), map.width - 1), by: 1)
+        let rows = stride(from: max(map.cell(top), 0), through: min(map.cell(top + size.height - 1), map.height - 1), by: 1)
         for layer in map.layers {
-            for (i, cell) in layer.enumerated() {
-                guard let cell else { continue }
-                let (x, y) = (Double(i % map.width * map.tileSize), Double(i / map.width * map.tileSize))
-                quad(texture, x: x, y: y, source: region(cell, tile, in: texture))
+            for row in rows {
+                for column in columns {
+                    guard let cell = layer[row * map.width + column] else { continue }
+                    quad(texture, x: Double(column * map.tileSize), y: Double(row * map.tileSize), source: region(cell, tile, in: texture))
+                }
             }
         }
     }
@@ -121,16 +126,16 @@ import PixelKitProtocol
             modified[file] = modificationDate(url)
             let name = (file as NSString).deletingPathExtension
             if file.hasSuffix(".json") {
-                sheets[name] = nil // read again on next use
+                (sheets[name], fonts[name]) = (nil, nil) // read again on next use
             } else if let texture = try? loader.newTexture(URL: url, options: [.SRGB: false]) {
-                textures[name] = texture
+                (textures[name], fonts[name]) = (texture, nil)
             }
         }
     }
 
-    /// Queues a textured quad, its pixels multiplied by `color`. Consecutive quads with the same texture reach the GPU
-    /// as one draw call.
-    func quad(_ texture: MTLTexture, x: Double, y: Double, source s: Rect, flip: Bool = false, color: SIMD4<Float> = .one) {
+    /// Queues a textured quad, its pixels multiplied by `color` (0xRRGGBB, where white leaves them as they are).
+    /// Consecutive quads with the same texture reach the GPU as one draw call.
+    func quad(_ texture: MTLTexture, x: Double, y: Double, source s: Rect, flip: Bool = false, color: UInt32 = 0xFFFFFF) {
         if texture !== batchTexture {
             flush()
             batchTexture = texture
@@ -142,7 +147,8 @@ import PixelKitProtocol
         let (v0, v1) = (Float(s.y) / h, Float(s.y + s.height) / h)
         if flip { swap(&u0, &u1) }
         let corners: [SIMD4<Float>] = [[x0, y0, u0, v0], [x1, y0, u1, v0], [x0, y1, u0, v1], [x1, y0, u1, v0], [x1, y1, u1, v1], [x0, y1, u0, v1]]
-        vertices += corners.map { SIMD8(lowHalf: $0, highHalf: color) }
+        let tint = SIMD4<Float>(Float(color >> 16 & 0xFF), Float(color >> 8 & 0xFF), Float(color & 0xFF), 255) / 255
+        vertices += corners.map { SIMD8(lowHalf: $0, highHalf: tint) }
     }
 
     func flush() {

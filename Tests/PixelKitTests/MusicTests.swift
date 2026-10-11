@@ -1,8 +1,9 @@
 import AVFoundation
+import Metal
 import Testing
 @testable import PixelKit
 
-@MainActor @Test func musicKeepsItsTrackSwitchesStopsAndStartsOverWhenTheFileChanges() throws {
+@MainActor @Test func musicKeepsItsTrackSwitchesStopsPausesWithTheGameAndStartsOverWhenTheFileChanges() throws {
     let folder = FileManager.default.temporaryDirectory.appending(path: "music-\(UUID())")
     try FileManager.default.createDirectory(at: folder.appending(path: "Assets"), withIntermediateDirectories: true)
     FileManager.default.changeCurrentDirectoryPath(folder.path) // games load Assets/ relative to here
@@ -29,6 +30,22 @@ import Testing
     try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: 10)], ofItemAtPath: "Assets/b.m4a")
     Music.restartIfChanged()
     #expect(Music.player !== b && Music.track == "b" && Music.player?.isPlaying == true)
+
+    // Pausing the game holds the track's place, and one that starts or restarts meanwhile waits for the resume.
+    let loop = Loop(resolution: Size(8, 8), device: try #require(MTLCreateSystemDefaultDevice()))
+    let playing = try #require(Music.player)
+    loop.paused = true
+    #expect(!playing.isPlaying)
+    loop.paused = false
+    #expect(Music.player === playing && playing.isPlaying) // resumed, not started over
+    loop.paused = true
+    try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: 20)], ofItemAtPath: "Assets/b.m4a")
+    Music.restartIfChanged()
+    #expect(Music.player !== playing && Music.player?.isPlaying == false)
+    Music.play("a")
+    #expect(Music.track == "a" && Music.player?.isPlaying == false)
+    loop.paused = false
+    #expect(Music.player?.isPlaying == true)
 
     Music.stop()
     #expect(Music.player == nil && Music.track == nil)

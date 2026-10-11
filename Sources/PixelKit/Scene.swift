@@ -116,6 +116,9 @@ public struct Sprite: Sendable {
     public private(set) var animation: String?
     /// Mirrors the sprite horizontally, e.g. to face left.
     public var flipped = false
+    /// Multiplies the sprite's pixels, as 0xRRGGBB: red (0xFF0000) for a hurt flash, or a color variant of light art.
+    /// White, the default, leaves them as they are.
+    public var color: UInt32 = 0xFFFFFF
     var time = 0.0
 
     public init(_ image: String) { self.image = image }
