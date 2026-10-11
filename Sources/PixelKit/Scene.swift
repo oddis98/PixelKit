@@ -6,7 +6,9 @@ import PixelKitProtocol
     /// The scene on screen. Assign a new one to switch scenes, or a fresh copy to restart.
     public static var current = Scene()
 
+    /// Everything in the scene, in the order it updates and draws.
     public private(set) var entities: [Entity] = []
+    /// The level's tiles, drawn behind the entities. `Entity.move(_:)` stops against its solid ones.
     public var tilemap: Tilemap?
     /// Top-left corner of the view, in world pixels.
     public var camera = Vector.zero
@@ -15,12 +17,14 @@ import PixelKitProtocol
 
     public init() {}
 
+    /// Puts an entity in the scene with its top-left corner at `position`, in world pixels.
     public func add(_ entity: Entity, at position: Vector) {
         entity.position = position
         entity.scene = self
         entities.append(entity)
     }
 
+    /// Takes an entity out of the scene, even from its own `update`.
     public func remove(_ entity: Entity) {
         entities.removeAll { $0 === entity }
         entity.scene = nil
@@ -51,14 +55,18 @@ import PixelKitProtocol
     public var velocity = Vector.zero
     /// The solid part of the entity, relative to `position`.
     public var hitbox = Rect(x: 0, y: 0, width: 16, height: 16)
+    /// What it looks like, drawn at `position`; nil draws nothing.
     public var sprite: Sprite?
+    /// The scene it's in, from `Scene.add(_:at:)`.
     public internal(set) weak var scene: Scene?
     var remainder = Vector.zero // sub-pixel movement not applied yet
 
     public init() {}
 
+    /// Runs 60 times a second; `dt` is the time since the last update, in seconds. Override it to move and react.
     open func update(_ dt: Double) {}
 
+    /// Draws the sprite. Override it to draw more, in world pixels, and call super to keep the sprite.
     open func draw(_ screen: Screen) {
         if let sprite { screen.draw(sprite, x: position.x, y: position.y) }
     }
@@ -78,6 +86,7 @@ import PixelKitProtocol
     /// Standing on a solid tile.
     public var onGround: Bool { solid(at: position + [0, 1]) }
 
+    /// True when the two hitboxes overlap.
     public func overlaps(_ other: Entity) -> Bool { box(at: position).intersects(other.box(at: other.position)) }
 
     func slide(_ pixels: Int, axis: Int) -> Bool {
@@ -101,6 +110,7 @@ import PixelKitProtocol
 /// A picture from `Assets/<image>.png`. If `Assets/<image>.json` (written by the pixel editor) cuts it into frames,
 /// `play(_:)` runs one of its animations; without it, the whole image is one frame.
 public struct Sprite: Sendable {
+    /// The image's name in Assets, without ".png".
     public var image: String
     /// The animation playing, by name; nil shows the first frame.
     public private(set) var animation: String?
@@ -119,11 +129,12 @@ public struct Sprite: Sendable {
 /// A grid of tiles from a tileset, `Assets/<tileset>.png`, cut into `tileSize` squares numbered left to right,
 /// then top to bottom.
 public struct Tilemap: Sendable {
+    /// The tileset image's name in Assets, without ".png".
     public var tileset: String
+    /// The width and height of a tile, in pixels.
     public var tileSize: Int
     /// Size in tiles.
-    public var width: Int
-    public var height: Int
+    public var width, height: Int
     /// Each layer's tiles row by row, `layers[layer][row * width + column]`; nil is empty. The first layer draws first.
     public var layers: [[Int?]]
     /// Tile numbers that block movement, in any layer.
@@ -131,7 +142,9 @@ public struct Tilemap: Sendable {
     /// Things placed in the level with the map editor's Objects tool, like coins or where the player starts.
     public var objects: [Object] = []
 
+    /// Something placed in the level with the map editor's Objects tool.
     public struct Object: Sendable {
+        /// What it is, like "coin" or "player"; `objects(named:)` finds them by it.
         public var name: String
         /// Top-left corner, in pixels.
         public var position: Vector

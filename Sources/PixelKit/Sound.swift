@@ -1,5 +1,6 @@
 import AVFoundation
 
+/// Sound effects: `Sound.play("jump")`.
 @MainActor public enum Sound {
     static var playing: [AVAudioPlayer] = [] // players stop if released, so keep them until they finish
 
@@ -27,6 +28,7 @@ import AVFoundation
         if name != track { start(name, audioPlayer(name)) }
     }
 
+    /// Stops the music.
     public static func stop() {
         player?.stop()
         (player, track) = (nil, nil)

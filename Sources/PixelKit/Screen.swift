@@ -66,6 +66,7 @@ import PixelKitProtocol
         quad(texture, x: x, y: y, source: region(frame, size, in: texture), flip: sprite.flipped)
     }
 
+    /// Draws the tilemap's layers, first to last. `Scene` draws its `tilemap` this way.
     // ponytail: draws every tile; cull to the camera when maps get big
     public func draw(_ map: Tilemap) {
         let texture = texture(map.tileset)

@@ -19,6 +19,7 @@ import PixelKitProtocol
 /// A position or velocity in pixels.
 public typealias Vector = SIMD2<Double>
 
+/// A width and height in pixels, like a game's `resolution`.
 public struct Size: Sendable, Equatable {
     public var width, height: Int
 
@@ -28,6 +29,7 @@ public struct Size: Sendable, Equatable {
     }
 }
 
+/// A rectangle in pixels: its top-left corner and its size, like an entity's `hitbox`.
 public struct Rect: Sendable, Equatable {
     public var x, y, width, height: Int
 
@@ -35,6 +37,7 @@ public struct Rect: Sendable, Equatable {
         (self.x, self.y, self.width, self.height) = (x, y, width, height)
     }
 
+    /// True when the two overlap by a pixel or more.
     public func intersects(_ other: Rect) -> Bool {
         x < other.x + other.width && other.x < x + width && y < other.y + other.height && other.y < y + height
     }

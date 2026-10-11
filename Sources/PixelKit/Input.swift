@@ -9,6 +9,7 @@ public enum Button: Sendable, CaseIterable {
     case left, right, up, down, a, b, start
 }
 
+/// The virtual gamepad, read in `update`: `Input.held(.right)`, `Input.pressed(.a)`.
 @MainActor public enum Input {
     /// True while the button is down.
     public static func held(_ button: Button) -> Bool { now.contains(button) }
