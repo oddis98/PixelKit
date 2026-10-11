@@ -53,6 +53,8 @@ It edits and navigates like Xcode too: completions with placeholders you Tab bet
 
 And it runs like Xcode: pick My Mac or an iPhone simulator in the middle of the toolbar and press ⌘R. The activity view beside it shows the build's progress and its errors and warnings, which open the Issue navigator. While a game runs on the Mac, ⌘R switches it to your latest code and keeps its state. The console shows the game's output, or the build log. Product ▸ Clean Build Folder (⇧⌘K) starts the next build from scratch.
 
+The pixel and map editors pick tools from the keyboard, with Aseprite's letters: B pencil (the map's paint), E eraser, G fill, L line, U rectangle, I picker, M select, and O for the map's objects. In a map, objects snap to the tiles (hold ⌥ to place them freely) and take properties your code reads from `Tilemap.objects`, and a running game shows newly painted tiles right away. Double-click a layer to rename it. Resize… changes the size of each frame of an image, scaling the art or adding and cropping pixels around it.
+
 New Game (⌘N) writes a starter game that gets PixelKit from this repo on GitHub. Export App… makes it a Mac app, whose icon is the game's `Assets/AppIcon.png` if it has one: square pixel art, drawn right to the edges, since macOS rounds the corners.
 
 To bundle the editor as an app:

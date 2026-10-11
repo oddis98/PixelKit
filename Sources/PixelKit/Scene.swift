@@ -128,6 +128,10 @@ public struct Sprite: Sendable {
 
 /// A grid of tiles from a tileset, `Assets/<tileset>.png`, cut into `tileSize` squares numbered left to right,
 /// then top to bottom.
+///
+/// While the game runs, the scene's tilemap reloads when its `.tilemap` (or the tileset's `.json`) changes, so tiles
+/// painted in the editor show up live. Entities already in the scene stay as they are: objects moved or added in
+/// the editor show up the next time the game builds the level.
 public struct Tilemap: Sendable {
     /// The tileset image's name in Assets, without ".png".
     public var tileset: String
@@ -141,6 +145,9 @@ public struct Tilemap: Sendable {
     public var solid: Set<Int>
     /// Things placed in the level with the map editor's Objects tool, like coins or where the player starts.
     public var objects: [Object] = []
+    var name: String? // the .tilemap it came from
+    var modified: [Date?] = [] // when it and the tileset's .json were last changed, as loaded
+    var removed: Set<Int> = [] // what removeTiles took out, kept out when the map reloads
 
     /// Something placed in the level with the map editor's Objects tool.
     public struct Object: Sendable {
@@ -155,17 +162,32 @@ public struct Tilemap: Sendable {
     /// Loads `Assets/<name>.tilemap`, made in the tilemap editor. The tile size and which tiles are solid
     /// come from the tileset's `.json`.
     public init(_ name: String) {
-        let url = assetURL("\(name).tilemap")
-        do {
-            let map = try TilemapFile(contentsOf: url)
-            let sheet = try SheetFile(contentsOf: assetURL("\(map.tileset).json"))
-            (tileset, tileSize, width, height) = (map.tileset, sheet.frameWidth, map.width, map.height)
-            layers = map.layers.map { $0.tiles.map { $0 < 0 ? nil : $0 } }
-            solid = Set(sheet.solid ?? [])
-            objects = (map.objects ?? []).map { Object(name: $0.name, position: [Double($0.x), Double($0.y)], properties: $0.properties ?? [:]) }
-        } catch {
-            fatalError("PixelKit: can't load \(url.path): \(error.localizedDescription)")
+        (tileset, tileSize, width, height, layers, solid) = ("", 0, 0, 0, [], [])
+        do { try load(name) } catch {
+            fatalError("PixelKit: can't load \(assetURL("\(name).tilemap").path): \(error.localizedDescription)")
         }
+    }
+
+    mutating func load(_ name: String) throws {
+        let url = assetURL("\(name).tilemap")
+        let map = try TilemapFile(contentsOf: url)
+        let sheetURL = assetURL("\(map.tileset).json")
+        let sheet = try SheetFile(contentsOf: sheetURL)
+        (tileset, tileSize, width, height) = (map.tileset, sheet.frameWidth, map.width, map.height)
+        layers = map.layers.map { $0.tiles.map { $0 < 0 ? nil : $0 } }
+        solid = Set(sheet.solid ?? [])
+        objects = (map.objects ?? []).map { Object(name: $0.name, position: [Double($0.x), Double($0.y)], properties: $0.properties ?? [:]) }
+        (self.name, modified) = (name, [modificationDate(url), modificationDate(sheetURL)])
+        for tile in removed { _ = removeTiles(tile) }
+    }
+
+    /// Loads the map again if its files changed. One that can't be read keeps the map as it is.
+    mutating func reloadIfChanged() {
+        guard let name else { return }
+        let dates = [modificationDate(assetURL("\(name).tilemap")), modificationDate(assetURL("\(tileset).json"))]
+        guard dates != modified else { return }
+        modified = dates // so a broken file is tried again only once it changes again
+        try? load(name)
     }
 
     /// Builds a one-layer map from text, one string per row. `legend` maps characters to tile numbers;
@@ -186,6 +208,7 @@ public struct Tilemap: Sendable {
     /// Removes every `tile` from the map and returns where each one was (top-left corner, in pixels).
     /// Handy for tiles that only mark where things go, like coins or the player's start.
     public mutating func removeTiles(_ tile: Int) -> [Vector] {
+        removed.insert(tile)
         var found: [Vector] = []
         for layer in layers.indices {
             for i in layers[layer].indices where layers[layer][i] == tile {

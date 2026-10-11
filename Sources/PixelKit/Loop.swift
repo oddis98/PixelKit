@@ -36,6 +36,7 @@ import PixelKitProtocol
         frames += 1
         if frames % 15 == 0 { // 4 times a second
             screen.reloadChangedAssets()
+            Scene.current.tilemap?.reloadIfChanged()
             Music.restartIfChanged()
         }
 

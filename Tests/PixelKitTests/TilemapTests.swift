@@ -38,3 +38,27 @@ import Testing
     try map.write(to: file)
     #expect(try TilemapFile(contentsOf: file) == map)
 }
+
+@MainActor @Test func tilemapsReloadWhenTheirFilesChangeKeepingRemovedTilesOut() throws {
+    let assets = FileManager.default.temporaryDirectory.appending(path: "reload-\(UUID())/Assets")
+    try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
+    FileManager.default.changeCurrentDirectoryPath(assets.deletingLastPathComponent().path) // games load Assets/ relative to here
+    func save(_ file: some AssetFile, as name: String, secondsLater: Double) throws {
+        try file.write(to: assets.appending(path: name))
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: secondsLater)], ofItemAtPath: assets.appending(path: name).path)
+    }
+    try save(SheetFile(frameWidth: 8, frameHeight: 8), as: "tiles.json", secondsLater: 0)
+    try save(TilemapFile(tileset: "tiles", width: 2, height: 1, layers: [.init(name: "Ground", tiles: [5, -1])]), as: "level.tilemap", secondsLater: 0)
+    var map = Tilemap("level")
+    _ = map.removeTiles(5) // a marker, like where a coin goes
+
+    try save(TilemapFile(tileset: "tiles", width: 2, height: 1, layers: [.init(name: "Ground", tiles: [5, 1])]), as: "level.tilemap", secondsLater: 10)
+    map.reloadIfChanged()
+    #expect(map.layers == [[nil, 1]]) // the new tile is in, and the marker stays out
+    try save(SheetFile(frameWidth: 8, frameHeight: 8, solid: [1]), as: "tiles.json", secondsLater: 20)
+    map.reloadIfChanged()
+    #expect(map.solid == [1])
+    try Data("{".utf8).write(to: assets.appending(path: "level.tilemap")) // can't be read: the map stays
+    map.reloadIfChanged()
+    #expect(map.layers == [[nil, 1]])
+}
