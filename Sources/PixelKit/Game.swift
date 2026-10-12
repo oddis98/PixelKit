@@ -43,6 +43,39 @@ public struct Rect: Sendable, Equatable {
     }
 }
 
+/// An image in the game's `Assets`, by its file's name without ".png": a sprite, a tileset, a font or a text box. The
+/// editor names each of the game's images, maps, sounds and objects in `Sources/<Game>/AssetNames.swift`, as Xcode
+/// does an asset catalog's, so `Sprite(.slime)` completes, and a typo, or an asset renamed or deleted, is an error
+/// where it's used rather than a crash when the game gets there. `ImageName(name)` names one that comes from data.
+public struct ImageName: Hashable, Sendable {
+    public let name: String
+    public init(_ name: String) { self.name = name }
+}
+
+/// A level in the game's `Assets`, by its `.tilemap` file's name: `Tilemap(.level1)`. See `ImageName`.
+public struct MapName: Hashable, Sendable {
+    public let name: String
+    public init(_ name: String) { self.name = name }
+}
+
+/// A sound effect or music track in the game's `Assets`, by its file's name without its type (.wav, .m4a, .mp3 or
+/// .caf): `Sound.play(.jump)`, `Music.play(.theme)`. See `ImageName`.
+public struct SoundName: Hashable, Sendable {
+    public let name: String
+    public init(_ name: String) { self.name = name }
+}
+
+/// An object maps place, by its definition's name, `Assets/Objects/<name>.object`: `tilemap.objects(named: .start)`,
+/// or `object.name == .door` for a placed one. See `ImageName`.
+public struct ObjectName: Hashable, Sendable {
+    public let name: String
+    public init(_ name: String) { self.name = name }
+
+    /// Whether a placed object's name is this one's: `object.name == .door`.
+    public static func == (name: String, object: ObjectName) -> Bool { name == object.name }
+    public static func != (name: String, object: ObjectName) -> Bool { name != object.name }
+}
+
 public extension Game {
     var resolution: Size { Size(320, 180) }
 

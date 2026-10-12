@@ -1,13 +1,16 @@
 import AVFoundation
 
-/// Sound effects: `Sound.play("jump")`.
+/// Sound effects: `Sound.play(.jump)`.
 @MainActor public enum Sound {
     static var playing: [AVAudioPlayer] = [] // players stop if released, so keep them until they finish
 
     /// Plays `<name>` (.wav, .m4a, .mp3 or .caf) from `Assets` or a folder in it at `volume`, from 0 to 1. Sounds can
     /// overlap.
+    public static func play(_ sound: SoundName, volume: Double = 1) { play(sound.name, volume: volume) }
+
+    /// Plays a sound named in a string.
     // ponytail: one AVAudioPlayer per play; move to AVAudioEngine for lower latency or effects
-    public static func play(_ name: String, volume: Double = 1) {
+    @_disfavoredOverload public static func play(_ name: String, volume: Double = 1) {
         playing.removeAll { !$0.isPlaying }
         let player = audioPlayer(name)
         player.volume = Float(volume)
@@ -30,7 +33,10 @@ import AVFoundation
     /// Loops `<name>` (.wav, .m4a, .mp3 or .caf) from `Assets` or a folder in it. Playing the track that's already on
     /// keeps it going, so a scene can call this every time it starts. Given a `fade` in seconds, the old track fades out
     /// as this one fades in, so a house's music doesn't cut into the village's.
-    public static func play(_ name: String, fade: Double = 0) {
+    public static func play(_ track: SoundName, fade: Double = 0) { play(track.name, fade: fade) }
+
+    /// Loops a track named in a string, like one named after a map.
+    @_disfavoredOverload public static func play(_ name: String, fade: Double = 0) {
         if name != track { start(name, audioPlayer(name), fade: fade) }
     }
 

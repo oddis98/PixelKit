@@ -3,7 +3,7 @@ import PixelKit
 @main struct Village: Game {
     func start() -> Scene {
         let progress = Save.read(Progress.self, from: "progress") ?? Progress()
-        return Place("village", progress, position: progress.place)
+        return Place(.village, progress, position: progress.place)
     }
 }
 
@@ -25,7 +25,7 @@ enum Tile {
 /// Assets/Objects, say what's where: trees, the house's front and the villager, doors with where they lead (`to`) and
 /// where you come out (`at`), and where the game starts.
 final class Place: Scene {
-    let map: String
+    let map: MapName
     let progress: Progress
     let player = Entity()
     var facing: Vector = [0, 1]
@@ -34,21 +34,21 @@ final class Place: Scene {
     var words: [String] = []
     var letters = 0.0
 
-    init(_ map: String, _ progress: Progress, at spot: String = "start", position: Vector? = nil) {
+    init(_ map: MapName, _ progress: Progress, at spot: ObjectName = .start, position: Vector? = nil) {
         (self.map, self.progress) = (map, progress)
         super.init()
         ySort = true // things draw by where their feet are
         follow = player
         background = 0x000000
         var tiles = Tilemap(map)
-        for point in progress.cut[map] ?? [] { tiles.setTile(Tile.stump, at: point, layer: 0) }
+        for point in progress.cut[map.name] ?? [] { tiles.setTile(Tile.stump, at: point, layer: 0) }
         tilemap = tiles
         addObjects() // the trees and the house, solid at their base, and the villager
-        doors = tiles.objects.filter { $0.name == "door" }
-        player.sprite = Sprite("player")
+        doors = tiles.objects.filter { $0.name == .door }
+        player.sprite = Sprite(.player)
         player.hitbox = Rect(x: 3, y: 10, width: 10, height: 6) // the feet, so the head can pass in front of things
         add(player, at: position ?? tiles.objects(named: spot).first ?? .zero)
-        Music.play(map, fade: 0.5)
+        Music.play(SoundName(map.name), fade: 0.5) // each place's music is named after its map
     }
 
     override func update(_ dt: Double) {
@@ -81,12 +81,12 @@ final class Place: Scene {
         }
         if Input.pressed(.x), tilemap?.tile(at: front, layer: 0) == Tile.bush {
             tilemap?.setTile(Tile.stump, at: front, layer: 0)
-            progress.cut[map, default: []].append(front)
-            Sound.play("cut")
+            progress.cut[map.name, default: []].append(front)
+            Sound.play(.cut)
         }
         if let door = doors.first(where: { player.overlaps($0.box) }), let to = door.properties["to"] {
-            let next = Place(to, progress, at: door.properties["at"] ?? "start")
-            if to == "village" { // coming out of the house saves the game
+            let next = Place(MapName(to), progress, at: door.properties["at"].map(ObjectName.init) ?? .start)
+            if next.map == .village { // coming out of the house saves the game
                 progress.place = next.player.position
                 Save.write(progress, to: "progress")
             }
@@ -98,7 +98,7 @@ final class Place: Scene {
         super.draw(screen)
         guard let page = words.first else { return }
         let box = Rect(x: 8, y: screen.size.height - 48, width: screen.size.width - 16, height: 40)
-        screen.panel("textbox", in: box) // Assets/Sprites/textbox.png, stretched
+        screen.panel(.textbox, in: box) // Assets/Sprites/textbox.png, stretched
         // Wrapped first, so a word doesn't jump to the next line as it's typed.
         let typed = screen.wrap(page, width: box.width - 16).prefix(Int(letters))
         screen.text(String(typed), x: Double(box.x + 8), y: Double(box.y + 8))

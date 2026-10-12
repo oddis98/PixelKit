@@ -13,10 +13,10 @@ final class Level: Scene {
         super.init()
         background = 0x29ADFF
         // Made in the tilemap editor, with objects that say where the player starts and where the coins are.
-        tilemap = Tilemap("level1")
-        for position in tilemap!.objects(named: "player") { add(player, at: position) }
+        tilemap = Tilemap(.level1)
+        for position in tilemap!.objects(named: .player) { add(player, at: position) }
         total = addObjects().count { $0 is Coin } // made as Assets/Objects/coin.object says
-        Music.play("theme") // already on when the level restarts, so it keeps going
+        Music.play(.theme) // already on when the level restarts, so it keeps going
     }
 
     override func update(_ dt: Double) {
@@ -38,7 +38,7 @@ final class Level: Scene {
 final class Player: Entity {
     override init() {
         super.init()
-        sprite = Sprite("slime") // frames and animations come from Assets/Sprites/slime.json
+        sprite = Sprite(.slime) // frames and animations come from Assets/Sprites/slime.json
         hitbox = Rect(x: 1, y: 3, width: 14, height: 12)
     }
 
@@ -48,7 +48,7 @@ final class Player: Entity {
         velocity.y = min(velocity.y + 600 * dt, 300) // gravity, up to a top falling speed
         if Input.pressed(.a), onGround {
             velocity.y = -230
-            Sound.play("jump")
+            Sound.play(.jump)
         }
         move(dt)
         if direction != 0 { sprite?.flipped = direction < 0 }
@@ -62,6 +62,6 @@ final class Coin: Entity, Placeable {
         guard let level = scene as? Level, overlaps(level.player) else { return }
         level.coins += 1
         level.remove(self)
-        Sound.play("coin")
+        Sound.play(.coin)
     }
 }

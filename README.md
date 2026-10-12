@@ -39,7 +39,7 @@ final class Title: Scene {
 
 Then `swift run`. A window opens on a 320×180 canvas; press Space for a new color.
 
-Next, give it a sprite: put a PNG in `Assets/Sprites/` (say `Assets/Sprites/player.png`), and add an `Entity` whose `sprite = Sprite("player")`. Games find assets by name in any folder of `Assets`, so sprites, tilesets, maps, objects and sounds each get a folder of their own. [`Examples/Platformer`](Examples/Platformer) shows a whole game: a level, animations, collisions and sounds. [`Examples/Village`](Examples/Village) is a top-down one: walking behind trees and under roofs (`ySort` and layers above), a camera that follows, a door that fades into a house, a villager in a text box, and saves.
+Next, give it a sprite: put a PNG in `Assets/Sprites/` (say `Assets/Sprites/player.png`), and add an `Entity` whose `sprite = Sprite("player")` (or `Sprite(.player)` once the editor has named your assets, below). Games find assets by name in any folder of `Assets`, so sprites, tilesets, maps, objects and sounds each get a folder of their own. [`Examples/Platformer`](Examples/Platformer) shows a whole game: a level, animations, collisions and sounds. [`Examples/Village`](Examples/Village) is a top-down one: walking behind trees and under roofs (`ySort` and layers above), a camera that follows, a door that fades into a house, a villager in a text box, and saves.
 
 ## The editor
 
@@ -56,6 +56,10 @@ And it runs like Xcode: pick My Mac, your iPhone or iPad, or an iPhone simulator
 The pixel and map editors pick tools from the keyboard, with Aseprite's letters: B pencil (the map's paint), E eraser, G fill, L line, U rectangle, I picker, M select, and O for the map's objects. A layer's context menu puts it Above Objects, for roofs and treetops, and a running game shows newly painted tiles right away. Double-click a layer to rename it. Resize… changes the size of each frame of an image, scaling the art or adding and cropping pixels around it.
 
 A game's objects (a coin, a tree, a villager, a door, where the player starts) are defined once, in `Assets/Objects`: the sprite each is drawn with, the part that collides, whether it's solid, its properties with their types and defaults, and the Swift class it's made as, any `final class Villager: Entity, Placeable`. The object editor sets all that, with the hitbox dragged on the sprite. The map editor puts them down from that list, snapping to the tiles (hold ⌥ to place them freely), with a control for each property's type; drag an object's corner to size it, for doors and other zones. A scene's `addObjects()` then makes each object placed in its map as its class, which reads the map's settings for it from `object`. Renaming a sprite, map or object in the Project navigator renames it in the maps and objects that name it.
+
+Your code names assets the way an app names its images in Xcode: `Sprite(.slime)`, `Tilemap(.level1)`, `Sound.play(.jump)`, `screen.panel(.textbox, in: box)`, `objects(named: .start)`. The editor writes a Swift name for each image, map, sound and object in `Sources/<Game>/AssetNames.swift` and again whenever they change, so completion offers them after the dot, one made a moment ago included, and a typo, or an asset renamed or deleted, is an error where it's used instead of a crash when the game gets there. Strings still work, for names that come from data, like a door's `to`: `Tilemap(to)`, or `MapName(to)` to pass it on as a name.
+
+Drag art from Finder onto the Project navigator to copy it in: onto `Assets`, each file goes into its kind's folder, a name that's taken gets a number, and JPEGs, GIFs and other images become PNGs.
 
 The toolbar's New menu, like File ▸ New, makes a sprite, tileset, map or object in its folder, and Organize Assets, in the `Assets` folder's context menu, sorts an older game's files into those folders without renaming anything.
 

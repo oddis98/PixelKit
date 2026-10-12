@@ -251,7 +251,11 @@ public struct Sprite: Sendable {
     public var opacity = 1.0
     var time = 0.0
 
-    public init(_ image: String) { self.image = image }
+    /// A sprite of one of the game's images: `Sprite(.slime)`.
+    public init(_ image: ImageName) { self.image = image.name }
+
+    /// A sprite of an image named in a string, like one that comes from data.
+    @_disfavoredOverload public init(_ image: String) { self.image = image }
 
     /// Starts the named animation. Playing the one that's already running keeps it going, so it's fine every frame.
     public mutating func play(_ animation: String) {
@@ -336,7 +340,10 @@ public struct Tilemap: Sendable {
 
     /// Loads `<name>.tilemap` from `Assets` or a folder in it, like `Assets/Maps`, made in the tilemap editor. The tile
     /// size and which tiles are solid come from the tileset's `.json`, and what its objects are from their definitions.
-    public init(_ name: String) {
+    public init(_ map: MapName) { self.init(map.name) }
+
+    /// Loads a map named in a string, like a door's `to`.
+    @_disfavoredOverload public init(_ name: String) {
         (tileset, tileSize, width, height, layers, solid) = ("", 0, 0, 0, [], [])
         do { try load(name) } catch {
             fatalError("PixelKit: can't load \(assetURL("\(name).tilemap").path): \(error.localizedDescription)")
@@ -385,7 +392,12 @@ public struct Tilemap: Sendable {
 
     /// Builds a one-layer map from text, one string per row. `legend` maps characters to tile numbers;
     /// any other character is empty. Every tile in the legend is solid unless you pass `solid`.
-    public init(_ tileset: String, tileSize: Int, rows: [String], legend: [Character: Int], solid: Set<Int>? = nil) {
+    public init(_ tileset: ImageName, tileSize: Int, rows: [String], legend: [Character: Int], solid: Set<Int>? = nil) {
+        self.init(tileset.name, tileSize: tileSize, rows: rows, legend: legend, solid: solid)
+    }
+
+    /// The same, with the tileset named in a string.
+    @_disfavoredOverload public init(_ tileset: String, tileSize: Int, rows: [String], legend: [Character: Int], solid: Set<Int>? = nil) {
         let width = rows.map(\.count).max() ?? 0
         (self.tileset, self.tileSize, self.width, height) = (tileset, tileSize, width, rows.count)
         layers = [rows.flatMap { row in row.map { legend[$0] } + Array(repeating: nil, count: width - row.count) }]
@@ -425,7 +437,10 @@ public struct Tilemap: Sendable {
     }
 
     /// Where each object called `name` is (its top-left corner, in pixels).
-    public func objects(named name: String) -> [Vector] { objects.filter { $0.name == name }.map(\.position) }
+    public func objects(named name: ObjectName) -> [Vector] { objects(named: name.name) }
+
+    /// The same, with the object named in a string, like a door's `at`.
+    @_disfavoredOverload public func objects(named name: String) -> [Vector] { objects.filter { $0.name == name }.map(\.position) }
 
     /// Removes every `tile` from the map and returns where each one was (top-left corner, in pixels).
     /// Handy for tiles that only mark where things go, like coins or the player's start.

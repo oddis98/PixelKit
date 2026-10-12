@@ -5,25 +5,39 @@ public extension Screen {
     /// Draws `text` with its top-left corner at (x, y), snapped to whole pixels; `\n` starts a new line. Given a
     /// `width` in pixels, it wraps: a word that would go past it starts a new line, and a word wider than that breaks.
     /// `font` is an image cut into glyphs, `Assets/<font>.png`, whose `.json` lists the `characters` they show (draw
-    /// one in the pixel editor); without it, a built-in 3x5 font draws. Each glyph takes up the columns it has pixels
-    /// in, then 1 pixel of space, and digits all take up the widest one's, so numbers don't shift as they count.
-    /// `color` (0xRRGGBB) tints the glyphs, and white leaves them as they are.
-    func text(_ text: String, x: Double, y: Double, width: Int? = nil, font: String? = nil, color: UInt32 = 0xFFFFFF) {
+    /// one in the pixel editor), like `font: .pixel`; without it, a built-in 3x5 font draws. Each glyph takes up the
+    /// columns it has pixels in, then 1 pixel of space, and digits all take up the widest one's, so numbers don't shift
+    /// as they count. `color` (0xRRGGBB) tints the glyphs, and white leaves them as they are.
+    @_disfavoredOverload func text(_ text: String, x: Double, y: Double, width: Int? = nil, font: String? = nil, color: UInt32 = 0xFFFFFF) {
         let (texture, font) = self.font(font)
         for glyph in font.layout(text, width: width) {
             quad(texture, x: x + Double(glyph.x), y: y + Double(glyph.y), source: region(glyph.index, font.glyph, in: texture), color: color)
         }
     }
 
+    /// Draws `text` in one of the game's fonts. (Only the other one leaves `font` out, or calls that leave it out would
+    /// match both.)
+    func text(_ text: String, x: Double, y: Double, width: Int? = nil, font: ImageName, color: UInt32 = 0xFFFFFF) {
+        self.text(text, x: x, y: y, width: width, font: font.name, color: color)
+    }
+
     /// The size of `text` in pixels, wrapped to `width` if you give one, for example to center it:
     /// `x: Double(160 - screen.textSize(title).width / 2)`.
-    func textSize(_ text: String, width: Int? = nil, font: String? = nil) -> Size { self.font(font).1.size(of: text, width: width) }
+    @_disfavoredOverload func textSize(_ text: String, width: Int? = nil, font: String? = nil) -> Size {
+        self.font(font).1.size(of: text, width: width)
+    }
+
+    /// The size of `text` in one of the game's fonts.
+    func textSize(_ text: String, width: Int? = nil, font: ImageName) -> Size { textSize(text, width: width, font: font.name) }
 
     /// `text` with a `\n` wherever `text(_:x:y:width:)` would wrap it. To type out words a letter at a time, draw
     /// `wrap(words, width: 200).prefix(letters)`: a word then doesn't jump to the next line halfway through.
-    func wrap(_ text: String, width: Int, font: String? = nil) -> String {
+    @_disfavoredOverload func wrap(_ text: String, width: Int, font: String? = nil) -> String {
         self.font(font).1.lines(text, width: width).joined(separator: "\n")
     }
+
+    /// `text` wrapped in one of the game's fonts.
+    func wrap(_ text: String, width: Int, font: ImageName) -> String { wrap(text, width: width, font: font.name) }
 }
 
 extension Screen {

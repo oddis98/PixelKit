@@ -1,4 +1,5 @@
 import Foundation
+import Metal
 import PixelKitProtocol
 import Testing
 @testable import PixelKit
@@ -112,4 +113,46 @@ final class Stone: Entity {} // not Placeable
     try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: 10)], ofItemAtPath: rock.path)
     scene.tilemap?.reloadIfChanged()
     #expect(scene.tilemap?.objects[1].sprite?.image == "boulder" && scene.tilemap?.objects[1].solid == false)
+}
+
+// As the editor writes them in a game's AssetNames.swift.
+extension ImageName { static let dot = ImageName("dot"), tiles = ImageName("tiles"), tiny = ImageName("tiny") }
+extension MapName { static let level = MapName("level") }
+extension SoundName { static let a = SoundName("a"), b = SoundName("b") }
+extension ObjectName { static let door = ObjectName("door") }
+
+@MainActor @Test func assetNamesDoWhatTheirStringsDo() throws {
+    let assets = try silentTracks().appending(path: "Assets") // a.wav and b.m4a, the current directory's
+    try SheetFile(frameWidth: 8, frameHeight: 8).write(to: assets.appending(path: "tiles.json"))
+    try ObjectFile(width: 16, height: 8).write(to: assets.appending(path: "door.object"))
+    try TilemapFile(tileset: "tiles", width: 2, height: 1, layers: [.init(name: "Ground", tiles: [0, -1])],
+                    objects: [.init(name: "door", x: 8, y: 0), .init(name: "start", x: 0, y: 0)]).write(to: assets.appending(path: "level.tilemap"))
+    let map = Tilemap(.level)
+    #expect(map.layers == Tilemap("level").layers && map.objects(named: .door) == [[8, 0]] && map.objects(named: "door") == [[8, 0]])
+    #expect(map.objects[0].name == .door && map.objects[1].name != .door && map.objects.filter { $0.name == .door }.count == 1)
+    #expect(Sprite(.dot).image == "dot" && Tilemap(.tiles, tileSize: 8, rows: ["#"], legend: ["#": 0]).layers == [[0]])
+
+    Music.volume = 0
+    defer { Music.stop(); Music.volume = 1 }
+    Music.play(.a, fade: 0)
+    #expect(Music.track == "a" && Music.player?.url?.lastPathComponent == "a.wav")
+    Sound.play(.b, volume: 0)
+    #expect(Sound.playing.last?.url?.lastPathComponent == "b.m4a")
+
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let screen = Screen(size: Size(8, 8), device: device, format: .bgra8Unorm)
+    let texture = try #require(device.makeTexture(descriptor: .texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 3, height: 3, mipmapped: false)))
+    (screen.textures["dot"], screen.sheets["dot"], screen.textures["tiny"]) = (texture, .some(nil), texture)
+    (screen.sheets["tiny"], screen.fonts["tiny"]) = (SheetFile(frameWidth: 1, frameHeight: 1, characters: "A"), Font(glyph: Size(1, 1), characters: "A", columns: [0...0]))
+    func drawn(_ draw: () -> Void) -> [SIMD8<Float>] {
+        screen.vertices = []
+        draw()
+        return screen.vertices
+    }
+    let box = Rect(x: 1, y: 1, width: 6, height: 5)
+    #expect(drawn { screen.draw(.dot, x: 1, y: 2) } == drawn { screen.draw("dot", x: 1, y: 2) })
+    #expect(drawn { screen.panel(.dot, in: box) } == drawn { screen.panel("dot", in: box) })
+    let text = drawn { screen.text("A A", x: 0, y: 0, width: 2, font: .tiny) }
+    #expect(text.count == 12 && text == drawn { screen.text("A A", x: 0, y: 0, width: 2, font: "tiny") })
+    #expect(screen.textSize("A A", font: .tiny) == screen.textSize("A A", font: "tiny") && screen.wrap("A A", width: 2, font: .tiny) == "A\nA")
 }

@@ -55,7 +55,10 @@ import Synchronization
     }
 
     /// Draws all of `Assets/<image>.png` with its top-left corner at (x, y), snapped to whole pixels.
-    public func draw(_ image: String, x: Double, y: Double) {
+    public func draw(_ image: ImageName, x: Double, y: Double) { draw(image.name, x: x, y: y) }
+
+    /// Draws an image named in a string.
+    @_disfavoredOverload public func draw(_ image: String, x: Double, y: Double) {
         let texture = texture(image)
         quad(texture, x: x, y: y, source: Rect(x: 0, y: 0, width: texture.width, height: texture.height))
     }
@@ -105,7 +108,10 @@ import Synchronization
     /// Draws `Assets/<image>.png` (its first frame, if its `.json` cuts it up) as a box of any size: the image cut
     /// in thirds each way, its corners as they are, its edges stretched along their length and its middle both ways.
     /// One frame drawn in the pixel editor makes every text box and menu.
-    public func panel(_ image: String, in box: Rect) {
+    public func panel(_ image: ImageName, in box: Rect) { panel(image.name, in: box) }
+
+    /// Draws an image named in a string as a box.
+    @_disfavoredOverload public func panel(_ image: String, in box: Rect) {
         let texture = texture(image)
         let frame = sheet(image).map { Size($0.frameWidth, $0.frameHeight) } ?? Size(texture.width, texture.height)
         // Each third's start and length, in the image and in the box. In a box smaller than two corners, they overlap.
