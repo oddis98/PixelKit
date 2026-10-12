@@ -51,7 +51,7 @@ The code editor uses your Xcode theme, light and dark, and colors names the way 
 
 It edits and navigates like Xcode too: completions with placeholders you Tab between, Quick Help (⌥-click), Open Quickly (⇧⌘O), Go Back and Forward (⌃⌘← ⌃⌘→), the Issue navigator (⌘5, and ⌘' for the next issue), and Editor ▸ Structure's shortcuts (⌘/ ⌘[ ⌘] ⌥⌘[ ⌥⌘] ⌃I). Make Swift files and folders with ⌘N and ⌥⌘N or from the Project navigator's context menu, and rename one with Return; a new file's classes work from your other files right away.
 
-And it runs like Xcode: pick My Mac or an iPhone simulator in the middle of the toolbar and press ⌘R. The activity view beside it shows the build's progress and its errors and warnings, which open the Issue navigator. While a game runs on the Mac, ⌘R switches it to your latest code and keeps its state. The console shows the game's output, or the build log. Product ▸ Clean Build Folder (⇧⌘K) starts the next build from scratch.
+And it runs like Xcode: pick My Mac, your iPhone or iPad, or an iPhone simulator in the middle of the toolbar and press ⌘R. The activity view beside it shows the build's progress and its errors and warnings, which open the Issue navigator. While a game runs on the Mac, ⌘R switches it to your latest code and keeps its state. The console shows the game's output, or the build log. Product ▸ Clean Build Folder (⇧⌘K) starts the next build from scratch.
 
 The pixel and map editors pick tools from the keyboard, with Aseprite's letters: B pencil (the map's paint), E eraser, G fill, L line, U rectangle, I picker, M select, and O for the map's objects. In a map, objects snap to the tiles (hold ⌥ to place them freely) and take properties your code reads from `Tilemap.objects`; drag an object's corner to size it, for doors and other zones. A layer's context menu puts it Above Objects, for roofs and treetops, and a running game shows newly painted tiles right away. Double-click a layer to rename it. Resize… changes the size of each frame of an image, scaling the art or adding and cropping pixels around it.
 
@@ -79,6 +79,16 @@ scripts/make-ios-app.sh path/to/MyGame MyGame.app
 
 ```bash
 xcrun simctl install booted MyGame.app && xcrun simctl launch booted games.pixelkit.MyGame
+```
+
+To play on your own iPhone or iPad, choose it under iOS Devices in the toolbar and press ⌘R: the editor builds the game, signs it, installs it there and shows its output in the console, and Stop ends it. It signs with the development profile Xcode makes for your team, so sign in to your Apple Account in Xcode's Accounts settings and run any app on the device from Xcode once, which registers it. The device needs Developer Mode on, in its Settings under Privacy & Security. With more than one team, choose the one that signs games in the editor's Settings (⌘,). From this repo, give the script that profile and one of its signing identities:
+
+```bash
+PROFILE=path/to/profile.mobileprovision IDENTITY="Apple Development: …" scripts/make-ios-app.sh path/to/MyGame MyGame.app
+```
+
+```bash
+xcrun devicectl device install app --device <udid> MyGame.app && xcrun devicectl device process launch --device <udid> --console games.pixelkit.MyGame
 ```
 
 ## More
