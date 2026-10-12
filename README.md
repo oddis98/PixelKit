@@ -71,7 +71,7 @@ PIXELKIT_LOCAL="$PWD" swift run Editor
 
 ## iPhone and iPad
 
-Games run in the iOS Simulator too, reaching the screen's edges, with a D-pad and A and B buttons drawn over the game, or below it when the phone is upright; game controllers and iPad keyboards work as well. Add `.iOS(.v18)` to your game's `platforms` (New Game does), then choose an iPhone simulator in the editor's toolbar and press ⌘R. The simulator's screen shows in the preview: click and drag to touch it, click it to type, and press Home or Rotate in its bar (and Fold or Unfold on iPhone Duo). Or, from this repo:
+Games run in the iOS Simulator too, reaching the screen's edges, with a D-pad and A and B buttons drawn over the game, or below it when the phone is upright; game controllers and iPad keyboards work as well. Add `.iOS(.v18)` to your game's `platforms` (New Game does), then choose an iPhone simulator in the editor's toolbar and press ⌘R. The simulator's screen shows in the preview, in Xcode's frame for the device: click and drag to touch it, click it to type, and press Home or Rotate in its bar (and Fold or Unfold on iPhone Duo). Or, from this repo:
 
 ```bash
 scripts/make-ios-app.sh path/to/MyGame MyGame.app
