@@ -1,6 +1,7 @@
 import ImageIO
 import MetalKit
 import PixelKitProtocol
+import Synchronization
 
 /// The pixel canvas your game draws on. (0, 0) is the top-left pixel.
 @MainActor public final class Screen {
@@ -255,14 +256,47 @@ fragment float4 spriteFragment(Vertex in [[stage_in]], texture2d<float> t [[text
 }
 """
 
-/// Where a game file is: inside the app once the game has been exported, otherwise in `Assets/` of the folder the
-/// game runs in (the editor runs games in their project folder).
+/// Where a game file, `<name>.<extension>`, is: anywhere in `Assets`, at the top first, then in its folders by path, so
+/// games keep their sprites, maps and sounds in folders and find them by name. `Assets` is inside the app once the game
+/// has been exported, otherwise in the folder the game runs in (the editor runs games in their project folder).
+/// A file that isn't where it was, or wasn't there, is looked for again at most once a second (the loop checks loaded
+/// files every frame), so files added or moved while the game runs are found.
 func assetURL(_ file: String) -> URL {
-    if let bundledAssets { return bundledAssets.appending(path: file) }
-    return URL(fileURLWithPath: "Assets/\(file)")
+    let root = bundledAssets ?? URL(fileURLWithPath: "Assets")
+    return assetIndex.withLock { index in
+        func found() -> URL? { index.files[file].flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil } }
+        if index.root == root, let url = found() { return url }
+        if index.root != root || Date().timeIntervalSince(index.built) >= 1 { index.build(root) }
+        return found() ?? root.appending(path: file)
+    }
 }
 
 private let bundledAssets = Bundle.main.url(forResource: "Assets", withExtension: nil)
+let assetIndex = Mutex(AssetIndex())
+
+/// The files in `Assets` and its folders, by name.
+struct AssetIndex {
+    var root: URL?
+    var files: [String: URL] = [:]
+    var built = Date.distantPast
+    var warned: Set<String> = []
+
+    /// Names must be unique among files of one type; of two, the first by path wins, and the console says so.
+    mutating func build(_ root: URL) {
+        let paths = (FileManager.default.subpaths(atPath: root.path) ?? [])
+            .filter { !$0.split(separator: "/").contains { $0.hasPrefix(".") } } // the editor's, like an image's layers
+            .sorted { ($0.contains("/") ? 1 : 0, $0) < ($1.contains("/") ? 1 : 0, $1) }
+        (self.root, files, built) = (root, [:], Date())
+        for path in paths {
+            let name = (path as NSString).lastPathComponent
+            if let first = files[name] {
+                if warned.insert(name).inserted { print("PixelKit: Assets has two files called \(name), so it uses \(first.path), not \(path)") }
+            } else {
+                files[name] = root.appending(path: path)
+            }
+        }
+    }
+}
 
 func modificationDate(_ url: URL) -> Date? {
     try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date

@@ -5,7 +5,7 @@ import Testing
 
 @MainActor @Test func changedPNGsReloadAndUnreadableOnesKeepTheOldTexture() throws {
     let examples = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-        .deletingLastPathComponent().appending(path: "Examples/Platformer/Assets")
+        .deletingLastPathComponent().appending(path: "Examples/Platformer/Assets/Sprites")
     let folder = FileManager.default.temporaryDirectory.appending(path: "pixelkit-\(UUID())")
     try FileManager.default.createDirectory(at: folder.appending(path: "Assets"), withIntermediateDirectories: true)
     FileManager.default.changeCurrentDirectoryPath(folder.path) // games load Assets/ relative to here

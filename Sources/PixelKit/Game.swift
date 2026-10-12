@@ -48,6 +48,7 @@ public extension Game {
 
     static func main() {
         setvbuf(stdout, nil, _IOLBF, 0) // print() reaches the editor console line by line, not when a buffer fills
+        Scene.module = String(String(reflecting: Self.self).prefix { $0 != "." }) // where objects' classes are
         let game = Self()
         Scene.current = game.start()
         #if os(macOS)

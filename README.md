@@ -39,7 +39,7 @@ final class Title: Scene {
 
 Then `swift run`. A window opens on a 320×180 canvas; press Space for a new color.
 
-Next, give it a sprite: put a PNG in `Assets/` (say `Assets/player.png`), and add an `Entity` whose `sprite = Sprite("player")`. [`Examples/Platformer`](Examples/Platformer) shows a whole game: a level, animations, collisions and sounds. [`Examples/Village`](Examples/Village) is a top-down one: walking behind trees and under roofs (`ySort` and layers above), a camera that follows, a door that fades into a house, a villager in a text box, and saves.
+Next, give it a sprite: put a PNG in `Assets/Sprites/` (say `Assets/Sprites/player.png`), and add an `Entity` whose `sprite = Sprite("player")`. Games find assets by name in any folder of `Assets`, so sprites, tilesets, maps, objects and sounds each get a folder of their own. [`Examples/Platformer`](Examples/Platformer) shows a whole game: a level, animations, collisions and sounds. [`Examples/Village`](Examples/Village) is a top-down one: walking behind trees and under roofs (`ySort` and layers above), a camera that follows, a door that fades into a house, a villager in a text box, and saves.
 
 ## The editor
 
@@ -53,7 +53,11 @@ It edits and navigates like Xcode too: completions with placeholders you Tab bet
 
 And it runs like Xcode: pick My Mac, your iPhone or iPad, or an iPhone simulator in the middle of the toolbar and press ⌘R. The activity view beside it shows the build's progress and its errors and warnings, which open the Issue navigator. While a game runs on the Mac, ⌘R switches it to your latest code and keeps its state. The console shows the game's output, or the build log. Product ▸ Clean Build Folder (⇧⌘K) starts the next build from scratch.
 
-The pixel and map editors pick tools from the keyboard, with Aseprite's letters: B pencil (the map's paint), E eraser, G fill, L line, U rectangle, I picker, M select, and O for the map's objects. In a map, objects snap to the tiles (hold ⌥ to place them freely) and take properties your code reads from `Tilemap.objects`; drag an object's corner to size it, for doors and other zones. A layer's context menu puts it Above Objects, for roofs and treetops, and a running game shows newly painted tiles right away. Double-click a layer to rename it. Resize… changes the size of each frame of an image, scaling the art or adding and cropping pixels around it.
+The pixel and map editors pick tools from the keyboard, with Aseprite's letters: B pencil (the map's paint), E eraser, G fill, L line, U rectangle, I picker, M select, and O for the map's objects. A layer's context menu puts it Above Objects, for roofs and treetops, and a running game shows newly painted tiles right away. Double-click a layer to rename it. Resize… changes the size of each frame of an image, scaling the art or adding and cropping pixels around it.
+
+A game's objects (a coin, a tree, a villager, a door, where the player starts) are defined once, in `Assets/Objects`: the sprite each is drawn with, the part that collides, whether it's solid, its properties with their types and defaults, and the Swift class it's made as, any `final class Villager: Entity, Placeable`. The object editor sets all that, with the hitbox dragged on the sprite. The map editor puts them down from that list, snapping to the tiles (hold ⌥ to place them freely), with a control for each property's type; drag an object's corner to size it, for doors and other zones. A scene's `addObjects()` then makes each object placed in its map as its class, which reads the map's settings for it from `object`. Renaming a sprite, map or object in the Project navigator renames it in the maps and objects that name it.
+
+The toolbar's New menu, like File ▸ New, makes a sprite, tileset, map or object in its folder, and Organize Assets, in the `Assets` folder's context menu, sorts an older game's files into those folders without renaming anything.
 
 New Game (⇧⌘N) writes a starter game that gets PixelKit from this repo on GitHub. Export App… makes it a Mac app, whose icon is the game's `Assets/AppIcon.png` if it has one: square pixel art, drawn right to the edges, since macOS rounds the corners.
 

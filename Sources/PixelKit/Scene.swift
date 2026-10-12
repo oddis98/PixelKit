@@ -57,6 +57,35 @@ import PixelKitProtocol
         entity.scene = nil
     }
 
+    /// Adds the tilemap's objects that are things in the world and returns them: each one whose definition names a
+    /// class, made as that class (a `Placeable`), or that has a sprite, as an `Entity`. Zones and markers stay in
+    /// `tilemap.objects` for the game to read, like a door to step on or where the player starts.
+    @discardableResult public func addObjects() -> [Entity] {
+        (tilemap?.objects ?? []).compactMap { object in
+            guard object.class != nil || object.sprite != nil else { return nil }
+            let entity = Self.make(object)
+            add(entity, at: object.position)
+            return entity
+        }
+    }
+
+    /// The game's module, for finding its classes by name; `Game.main()` sets it.
+    static var module = ""
+    static var warned: Set<String> = [] // classes the console said something about
+
+    /// An object made as its class, or as an `Entity` if it names none, or one that's missing or isn't `Placeable`
+    /// (the console says why, once).
+    static func make(_ object: Tilemap.Object) -> Entity {
+        guard let name = object.class else { return Entity(object) }
+        let found: AnyClass? = NSClassFromString(name.contains(".") ? name : "\(module).\(name)")
+        if let type = found as? any Placeable.Type { return type.init(object) }
+        if warned.insert(name).inserted {
+            print(found == nil ? "PixelKit: \(object.name).object names the class \(name), which \(module) doesn't have, so it's an Entity"
+                               : "PixelKit: \(name) isn't Placeable, so \(object.name) is an Entity. Mark it: final class \(name): Entity, Placeable")
+        }
+        return Entity(object)
+    }
+
     /// Runs 60 times a second. Call super to update the entities.
     open func update(_ dt: Double) {
         for entity in entities {
@@ -118,9 +147,21 @@ struct Fade {
     public var solid = false
     /// The scene it's in, from `Scene.add(_:at:)`.
     public internal(set) weak var scene: Scene?
+    /// The map's object it was made from, for its properties. It's set after `init()` runs, so read it in a `lazy var`:
+    /// `lazy var speed = object?.double("speed") ?? 40`.
+    public var object: Tilemap.Object?
     var remainder = Vector.zero // sub-pixel movement not applied yet
 
     public init() {}
+
+    /// Makes an entity from an object placed in a map, as `Scene.addObjects()` does: `init()` runs, then it takes the
+    /// object's place, hitbox and solidity, and its sprite if it has one, and keeps the object in `object`. A subclass
+    /// that overrides `init()`, or declares no initializers, inherits this.
+    public convenience init(_ object: Tilemap.Object) {
+        self.init()
+        (self.object, position, hitbox, solid) = (object, object.position, object.hitbox, object.solid)
+        if let sprite = object.sprite { self.sprite = sprite }
+    }
 
     /// Runs 60 times a second; `dt` is the time since the last update, in seconds. Override it to move and react.
     open func update(_ dt: Double) {}
@@ -185,8 +226,17 @@ struct Fade {
     }
 }
 
-/// A picture from `Assets/<image>.png`. If `Assets/<image>.json` (written by the pixel editor) cuts it into frames,
-/// `play(_:)` runs one of its animations; without it, the whole image is one frame.
+/// An entity class that objects placed in maps are made as, named in their definition's Class. A `final` class needs
+/// nothing more than this mark, since it inherits `Entity.init(_:)`, which runs its `init()` and then gives it the
+/// object's sprite, hitbox and properties: `final class Villager: Entity, Placeable`. A class that isn't final makes it
+/// `required` (`required convenience init(_ object: Tilemap.Object) { … }`).
+@MainActor public protocol Placeable: Entity {
+    init(_ object: Tilemap.Object)
+}
+
+/// A picture from `<image>.png` in `Assets` or a folder in it, like `Assets/Sprites`. If `<image>.json` beside it
+/// (written by the pixel editor) cuts it into frames, `play(_:)` runs one of its animations; without it, the whole
+/// image is one frame.
 public struct Sprite: Sendable {
     /// The image's name in Assets, without ".png".
     public var image: String
@@ -209,12 +259,12 @@ public struct Sprite: Sendable {
     }
 }
 
-/// A grid of tiles from a tileset, `Assets/<tileset>.png`, cut into `tileSize` squares numbered left to right,
-/// then top to bottom.
+/// A grid of tiles from a tileset, `<tileset>.png` in `Assets` or a folder in it, cut into `tileSize` squares numbered
+/// left to right, then top to bottom.
 ///
-/// While the game runs, the scene's tilemap reloads when its `.tilemap` (or the tileset's `.json`) changes, so tiles
-/// painted in the editor show up live. Entities already in the scene stay as they are: objects moved or added in
-/// the editor show up the next time the game builds the level.
+/// While the game runs, the scene's tilemap reloads when its `.tilemap` (or the tileset's `.json`, or one of its
+/// objects' definitions) changes, so tiles painted in the editor show up live. Entities already in the scene stay as
+/// they are: objects moved or added in the editor show up the next time the game builds the level.
 public struct Tilemap: Sendable {
     /// The tileset image's name in Assets, without ".png".
     public var tileset: String
@@ -231,28 +281,61 @@ public struct Tilemap: Sendable {
     /// Things placed in the level with the map editor's Objects tool, like coins or where the player starts.
     public var objects: [Object] = []
     var name: String? // the .tilemap it came from
-    var modified: [Date?] = [] // when it and the tileset's .json were last changed, as loaded
+    var watched: [String] = [] // it, the tileset's .json and its objects' definitions
+    var modified: [Date?] = [] // when each was last changed, as loaded
     var removed: Set<Int> = [] // what removeTiles took out, kept out when the map reloads
     var edits: [SIMD3<Int>: Int?] = [:] // what setTile put down, by layer, column and row, kept when the map reloads
     var time = 0.0 // for animated tiles, advanced by the scene's updates
 
-    /// Something placed in the level with the map editor's Objects tool.
+    /// Something placed in the level with the map editor's Objects tool. What it is comes from its definition,
+    /// `Assets/Objects/<name>.object`, if it has one: its sprite, its hitbox, whether it's solid, its class, and its
+    /// properties' defaults.
     public struct Object: Sendable {
-        /// What it is, like "coin" or "player"; `objects(named:)` finds them by it.
+        /// What it is, like "coin" or "player", and its definition's file name; `objects(named:)` finds them by it.
         public var name: String
         /// Top-left corner, in pixels.
         public var position: Vector
-        /// Settings typed for it, like "speed": "40".
+        /// Settings for the game, like "speed": "40": its own, over its definition's defaults. `double(_:)` and
+        /// `bool(_:)` read them as numbers and toggles.
         public var properties: [String: String]
+        /// What it's drawn with, playing its definition's animation; nil for a zone, a marker, or an object without a
+        /// definition.
+        public var sprite: Sprite?
+        /// The part that collides, from its top-left corner: its definition's, or all of it.
+        public var hitbox: Rect
+        /// Blocks solid movers, as `Entity.solid` does.
+        public var solid: Bool
+        /// The game's class it's made as by `Scene.addObjects()`, by name.
+        public var `class`: String?
         var size: Size
 
-        /// Where it is and how big, in pixels: the size it was given in the map editor, or else, as the editor shows
-        /// it, the size of the image it's named after, or one tile. For zones like doors: `player.overlaps(door.box)`.
+        /// Where it is and how big, in pixels: the size it was given in the map editor, or else a zone's size or its
+        /// sprite's frame, or without a definition the frame of the image it's named after, or one tile. For zones
+        /// like doors: `player.overlaps(door.box)`.
         public var box: Rect { Rect(x: Int(position.x), y: Int(position.y), width: size.width, height: size.height) }
+
+        /// A property as a number, like "speed": "40"; nil if it has none or it isn't one.
+        public func double(_ name: String) -> Double? { properties[name].flatMap(Double.init) }
+
+        /// A property as a toggle, "true" or "false"; false if it has none.
+        public func bool(_ name: String) -> Bool { properties[name] == "true" }
+
+        init(_ placed: TilemapFile.Object, definition: ObjectFile?, tileSize: Int, frame: (String) -> Size?) {
+            let size = placed.size(definition, tileSize: tileSize) { frame($0).map { ($0.width, $0.height) } }
+            (name, position, properties) = (placed.name, [Double(placed.x), Double(placed.y)], placed.properties(definition))
+            sprite = definition?.sprite.map { name in
+                var sprite = Sprite(name)
+                if let animation = definition?.animation { sprite.play(animation) }
+                return sprite
+            }
+            hitbox = definition?.hitbox.map { Rect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }
+                ?? Rect(x: 0, y: 0, width: size.width, height: size.height)
+            (solid, `class`, self.size) = (definition?.solid ?? false, definition?.class, Size(size.width, size.height))
+        }
     }
 
-    /// Loads `Assets/<name>.tilemap`, made in the tilemap editor. The tile size and which tiles are solid
-    /// come from the tileset's `.json`.
+    /// Loads `<name>.tilemap` from `Assets` or a folder in it, like `Assets/Maps`, made in the tilemap editor. The tile
+    /// size and which tiles are solid come from the tileset's `.json`, and what its objects are from their definitions.
     public init(_ name: String) {
         (tileset, tileSize, width, height, layers, solid) = ("", 0, 0, 0, [], [])
         do { try load(name) } catch {
@@ -261,22 +344,30 @@ public struct Tilemap: Sendable {
     }
 
     mutating func load(_ name: String) throws {
-        let url = assetURL("\(name).tilemap")
-        let map = try TilemapFile(contentsOf: url)
-        let sheetURL = assetURL("\(map.tileset).json")
-        let sheet = try SheetFile(contentsOf: sheetURL)
+        let map = try TilemapFile(contentsOf: assetURL("\(name).tilemap"))
+        let sheet = try SheetFile(contentsOf: assetURL("\(map.tileset).json"))
         (tileset, tileSize, width, height) = (map.tileset, sheet.frameWidth, map.width, map.height)
         layers = map.layers.map { $0.tiles.map { $0 < 0 ? nil : $0 } }
         above = Set(map.layers.indices.filter { map.layers[$0].above == true })
         solid = Set(sheet.solid ?? [])
-        var images: [String: Size?] = [:] // the frame size of each name's image, read once
-        objects = (map.objects ?? []).map { object in
-            if images[object.name] == nil { images[object.name] = .some(frameSize(object.name)) }
-            let size = images[object.name]! ?? Size(tileSize, tileSize)
-            return Object(name: object.name, position: [Double(object.x), Double(object.y)], properties: object.properties ?? [:],
-                          size: Size(object.width ?? size.width, object.height ?? size.height))
+        let names = Set((map.objects ?? []).map(\.name)).sorted()
+        var definitions: [String: ObjectFile] = [:]
+        for name in names {
+            let url = assetURL("\(name).object")
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            do { definitions[name] = try ObjectFile(contentsOf: url) } catch { print("PixelKit: can't read \(url.path): \(error.localizedDescription)") }
         }
-        (self.name, modified) = (name, [modificationDate(url), modificationDate(sheetURL)])
+        var frames: [String: Size?] = [:] // each image's frame size, read once
+        objects = (map.objects ?? []).map { placed in
+            Object(placed, definition: definitions[placed.name], tileSize: tileSize) { image in
+                if frames[image] == nil { frames[image] = .some(frameSize(image)) }
+                return frames[image]!
+            }
+        }
+        // Watched for changes: the map, its tileset's .json and its objects' definitions.
+        self.name = name
+        watched = ["\(name).tilemap", "\(map.tileset).json"] + names.map { "\($0).object" }
+        modified = watched.map { modificationDate(assetURL($0)) }
         for tile in removed { _ = removeTiles(tile) }
         for (cell, tile) in edits where layers.indices.contains(cell.x) && (0..<width).contains(cell.y) && (0..<height).contains(cell.z) {
             layers[cell.x][cell.z * width + cell.y] = tile
@@ -286,7 +377,7 @@ public struct Tilemap: Sendable {
     /// Loads the map again if its files changed. One that can't be read keeps the map as it is.
     mutating func reloadIfChanged() {
         guard let name else { return }
-        let dates = [modificationDate(assetURL("\(name).tilemap")), modificationDate(assetURL("\(tileset).json"))]
+        let dates = watched.map { modificationDate(assetURL($0)) }
         guard dates != modified else { return }
         modified = dates // so a broken file is tried again only once it changes again
         try? load(name)

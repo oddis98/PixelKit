@@ -16,14 +16,14 @@ final class Progress: Codable {
     var cut: [String: [Vector]] = [:]
 }
 
-/// Tiles of Assets/tiles.png, numbered left to right, then top to bottom.
+/// Tiles of Assets/Tilesets/tiles.png, numbered left to right, then top to bottom.
 enum Tile {
     static let bush = 4, stump = 5
 }
 
-/// A map to walk around in: the village, or inside the house. Its objects, placed in the map editor, say what's where:
-/// trees, the house's front and the villager, doors with where they lead (`to`) and where you come out (`at`), and
-/// where the game starts.
+/// A map to walk around in: the village, or inside the house. Its objects, placed in the map editor and defined in
+/// Assets/Objects, say what's where: trees, the house's front and the villager, doors with where they lead (`to`) and
+/// where you come out (`at`), and where the game starts.
 final class Place: Scene {
     let map: String
     let progress: Progress
@@ -42,16 +42,9 @@ final class Place: Scene {
         background = 0x000000
         var tiles = Tilemap(map)
         for point in progress.cut[map] ?? [] { tiles.setTile(Tile.stump, at: point, layer: 0) }
-        for object in tiles.objects {
-            switch object.name {
-            case "tree": add(Thing("tree", base: Rect(x: 11, y: 38, width: 10, height: 8)), at: object.position) // its trunk
-            case "house": add(Thing("house", base: Rect(x: 0, y: -16, width: 80, height: 48)), at: object.position) // and under the eaves
-            case "villager": add(Villager(), at: object.position)
-            case "door": doors.append(object)
-            default: break
-            }
-        }
         tilemap = tiles
+        addObjects() // the trees and the house, solid at their base, and the villager
+        doors = tiles.objects.filter { $0.name == "door" }
         player.sprite = Sprite("player")
         player.hitbox = Rect(x: 3, y: 10, width: 10, height: 6) // the feet, so the head can pass in front of things
         add(player, at: position ?? tiles.objects(named: spot).first ?? .zero)
@@ -105,7 +98,7 @@ final class Place: Scene {
         super.draw(screen)
         guard let page = words.first else { return }
         let box = Rect(x: 8, y: screen.size.height - 48, width: screen.size.width - 16, height: 40)
-        screen.panel("textbox", in: box) // Assets/textbox.png, stretched
+        screen.panel("textbox", in: box) // Assets/Sprites/textbox.png, stretched
         // Wrapped first, so a word doesn't jump to the next line as it's typed.
         let typed = screen.wrap(page, width: box.width - 16).prefix(Int(letters))
         screen.text(String(typed), x: Double(box.x + 8), y: Double(box.y + 8))
@@ -113,29 +106,12 @@ final class Place: Scene {
     }
 }
 
-/// Something big the player walks behind and in front of, like a tree or the house's front. Its base is in the way.
-final class Thing: Entity {
-    init(_ image: String, base: Rect) {
-        super.init()
-        sprite = Sprite(image)
-        hitbox = base
-        solid = true
-    }
-}
-
-/// Stands in the way, and talks when you press A in front of them.
-final class Villager: Entity {
+/// Stands in the way, and talks when you press A in front of them. Their sprite, hitbox and solidity are in
+/// Assets/Objects/villager.object.
+final class Villager: Entity, Placeable {
     let words = [
         "Hello! Welcome to the village. The house up the path is yours, and the trees around it are older than any of us.",
         "The hedge by the garden has grown wild again. Stand in front of a bush and press X (C on a keyboard) to cut it.",
         "Your things are saved whenever you come out of your house.",
     ]
-
-    override init() {
-        super.init()
-        sprite = Sprite("villager")
-        sprite?.play("idle")
-        hitbox = Rect(x: 3, y: 10, width: 10, height: 6)
-        solid = true
-    }
 }

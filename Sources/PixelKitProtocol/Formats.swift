@@ -95,3 +95,68 @@ public struct TilemapFile: AssetFile, Equatable, Sendable {
         self.objects = objects
     }
 }
+
+/// An object maps place, defined once in `Assets/Objects/<name>.object`: what it's drawn with, its size, the part that
+/// collides, the game's class it's made as and its properties with their types and defaults. Every field is optional,
+/// so `{}` is a marker, like where the player starts.
+public struct ObjectFile: AssetFile, Equatable, Sendable {
+    /// The sprite it's drawn with; nil makes it a zone, like a door, which the map editor draws as a box.
+    public var sprite: String?
+    /// The animation the sprite plays; nil shows its first frame.
+    public var animation: String?
+    /// A zone's size in pixels; nil is one tile. With a sprite, it's the sprite's frame.
+    public var width: Int?
+    public var height: Int?
+    /// The part that collides, from its top-left corner; nil is all of it.
+    public var hitbox: Hitbox?
+    /// Blocks solid movers, as `Entity.solid` does; nil is false.
+    public var solid: Bool?
+    /// The game's class it's made as, by name: a `Placeable` entity.
+    public var `class`: String?
+    /// Settings for the game, in order, each with its type and default. A map's objects can change them.
+    public var properties: [Property]?
+
+    public struct Hitbox: Codable, Equatable, Sendable {
+        public var x, y, width, height: Int
+
+        public init(x: Int, y: Int, width: Int, height: Int) { (self.x, self.y, self.width, self.height) = (x, y, width, height) }
+    }
+
+    public struct Property: Codable, Equatable, Sendable {
+        public var name: String
+        /// nil is text.
+        public var type: PropertyType?
+        /// The default, as text like all values; nil is none.
+        public var value: String?
+
+        public init(name: String, type: PropertyType? = nil, value: String? = nil) { (self.name, self.type, self.value) = (name, type, value) }
+    }
+
+    /// What a property holds. Values are text in the files either way: "40", "true", a map's or an object's name.
+    public enum PropertyType: String, Codable, CaseIterable, Sendable {
+        case text, number, toggle, map, object
+    }
+
+    public init(sprite: String? = nil, animation: String? = nil, width: Int? = nil, height: Int? = nil, hitbox: Hitbox? = nil, solid: Bool? = nil,
+                class: String? = nil, properties: [Property]? = nil) {
+        (self.sprite, self.animation, self.width, self.height, self.hitbox) = (sprite, animation, width, height, hitbox)
+        (self.solid, self.class, self.properties) = (solid, `class`, properties)
+    }
+}
+
+public extension TilemapFile.Object {
+    /// Its size in pixels: as the map sized it, or else as its definition says, a zone's size or its sprite's frame.
+    /// Without a definition, as in maps from before objects had them, it's the frame of the image named after it.
+    /// One tile when nothing says. `frame` gives an image's frame size.
+    func size(_ definition: ObjectFile?, tileSize: Int, frame: (String) -> (width: Int, height: Int)?) -> (width: Int, height: Int) {
+        let natural = definition.map { $0.sprite.flatMap(frame) ?? ($0.width ?? tileSize, $0.height ?? tileSize) } ?? frame(name) ?? (tileSize, tileSize)
+        return (width ?? natural.width, height ?? natural.height)
+    }
+
+    /// Its properties: its own, over its definition's defaults.
+    func properties(_ definition: ObjectFile?) -> [String: String] {
+        (definition?.properties ?? []).reduce(into: properties ?? [:]) { all, property in
+            if all[property.name] == nil, let value = property.value { all[property.name] = value }
+        }
+    }
+}

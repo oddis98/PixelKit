@@ -4,7 +4,8 @@ import AVFoundation
 @MainActor public enum Sound {
     static var playing: [AVAudioPlayer] = [] // players stop if released, so keep them until they finish
 
-    /// Plays `Assets/<name>` (.wav, .m4a, .mp3 or .caf) at `volume`, from 0 to 1. Sounds can overlap.
+    /// Plays `<name>` (.wav, .m4a, .mp3 or .caf) from `Assets` or a folder in it at `volume`, from 0 to 1. Sounds can
+    /// overlap.
     // ponytail: one AVAudioPlayer per play; move to AVAudioEngine for lower latency or effects
     public static func play(_ name: String, volume: Double = 1) {
         playing.removeAll { !$0.isPlaying }
@@ -26,9 +27,9 @@ import AVFoundation
         didSet { if paused { player?.pause() } else { player?.play() } }
     }
 
-    /// Loops `Assets/<name>` (.wav, .m4a, .mp3 or .caf). Playing the track that's already on keeps it going, so a
-    /// scene can call this every time it starts. Given a `fade` in seconds, the old track fades out as this one fades
-    /// in, so a house's music doesn't cut into the village's.
+    /// Loops `<name>` (.wav, .m4a, .mp3 or .caf) from `Assets` or a folder in it. Playing the track that's already on
+    /// keeps it going, so a scene can call this every time it starts. Given a `fade` in seconds, the old track fades out
+    /// as this one fades in, so a house's music doesn't cut into the village's.
     public static func play(_ name: String, fade: Double = 0) {
         if name != track { start(name, audioPlayer(name), fade: fade) }
     }
@@ -83,7 +84,7 @@ func audioPlayer(_ name: String) -> AVAudioPlayer {
     #if os(iOS)
     _ = audioSession
     #endif
-    guard let url = soundURL(name) else { fatalError("PixelKit: there's no Assets/\(name).wav, .m4a, .mp3 or .caf") }
+    guard let url = soundURL(name) else { fatalError("PixelKit: Assets has no \(name).wav, .m4a, .mp3 or .caf") }
     do {
         return try AVAudioPlayer(contentsOf: url)
     } catch {

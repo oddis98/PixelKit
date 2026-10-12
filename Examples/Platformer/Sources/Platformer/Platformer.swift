@@ -13,13 +13,9 @@ final class Level: Scene {
         super.init()
         background = 0x29ADFF
         // Made in the tilemap editor, with objects that say where the player starts and where the coins are.
-        let map = Tilemap("level1")
-        for position in map.objects(named: "player") { add(player, at: position) }
-        for position in map.objects(named: "coin") {
-            add(Coin(), at: position)
-            total += 1
-        }
-        tilemap = map
+        tilemap = Tilemap("level1")
+        for position in tilemap!.objects(named: "player") { add(player, at: position) }
+        total = addObjects().count { $0 is Coin } // made as Assets/Objects/coin.object says
         Music.play("theme") // already on when the level restarts, so it keeps going
     }
 
@@ -42,7 +38,7 @@ final class Level: Scene {
 final class Player: Entity {
     override init() {
         super.init()
-        sprite = Sprite("slime") // frames and animations come from Assets/slime.json
+        sprite = Sprite("slime") // frames and animations come from Assets/Sprites/slime.json
         hitbox = Rect(x: 1, y: 3, width: 14, height: 12)
     }
 
@@ -60,14 +56,8 @@ final class Player: Entity {
     }
 }
 
-final class Coin: Entity {
-    override init() {
-        super.init()
-        sprite = Sprite("coin")
-        sprite?.play("spin")
-        hitbox = Rect(x: 1, y: 1, width: 6, height: 6)
-    }
-
+/// Placed in the level, with its sprite, its spin and its hitbox from Assets/Objects/coin.object.
+final class Coin: Entity, Placeable {
     override func update(_ dt: Double) {
         guard let level = scene as? Level, overlaps(level.player) else { return }
         level.coins += 1
