@@ -176,6 +176,16 @@ import PixelKitProtocol
     }
 }
 
+/// The biggest scale of `canvas` that fits in `drawable`, so on a phone the game reaches the screen's edges: at the top
+/// when the screen is taller than wide, leaving the rest to the touch controls, and centered otherwise. ponytail: not a
+/// whole number, so some of the game's pixels are a screen pixel wider; on a 3x screen that doesn't show.
+func fit(_ canvas: Size, in drawable: CGSize) -> MTLViewport {
+    let scale = min(drawable.width / Double(canvas.width), drawable.height / Double(canvas.height))
+    let (width, height) = (Double(canvas.width) * scale, Double(canvas.height) * scale)
+    return MTLViewport(originX: (drawable.width - width) / 2, originY: drawable.height > drawable.width ? 0 : (drawable.height - height) / 2,
+                       width: width, height: height, znear: 0, zfar: 1)
+}
+
 /// The biggest whole-number scale of `canvas` that fits in `drawable` (at least 1x), centered.
 func letterbox(_ canvas: Size, in drawable: CGSize) -> MTLViewport {
     let (w, h) = (Int(drawable.width), Int(drawable.height))

@@ -1,4 +1,5 @@
 #if os(iOS)
+import GameController
 import UIKit
 #endif
 import CoreGraphics
@@ -53,7 +54,7 @@ final class GameApp: UIResponder, UIApplicationDelegate, UIWindowSceneDelegate {
     }
 }
 
-/// The game scaled up to fill the screen, with the touch controls over it.
+/// The game scaled up to the screen's edges, with the touch controls over it, or below it when the screen is portrait.
 final class GameViewController: UIViewController {
     override func loadView() {
         let game = GameView(resolution: GameApp.resolution)
@@ -65,7 +66,19 @@ final class GameViewController: UIViewController {
 
     override var prefersStatusBarHidden: Bool { true }
     override var prefersHomeIndicatorAutoHidden: Bool { true }
-    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .landscape }
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .all }
+
+    // A keyboard's keys, as UIKit has them: GCKeyboard misses the ones the editor's preview sends a simulator.
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) { press(presses, down: true) }
+    override func pressesEnded(_ presses: Set<UIPress>, with event: UIPressesEvent?) { press(presses, down: false) }
+    override func pressesCancelled(_ presses: Set<UIPress>, with event: UIPressesEvent?) { press(presses, down: false) }
+
+    private func press(_ presses: Set<UIPress>, down: Bool) {
+        for case let key? in presses.map(\.key) {
+            let code = GCKeyCode(rawValue: key.keyCode.rawValue)
+            if down { Input.keys.insert(code) } else { Input.keys.remove(code) }
+        }
+    }
 }
 
 /// A D-pad and A and B buttons, drawn over the game. Every finger on them holds the buttons under it.

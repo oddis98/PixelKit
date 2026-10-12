@@ -15,3 +15,13 @@ import Testing
     let tiny = letterbox(Size(320, 180), in: CGSize(width: 100, height: 100))
     #expect([tiny.width, tiny.height] == [320, 180])
 }
+
+@Test func onAPhoneTheCanvasReachesTheEdgesAtTheTopInPortrait() {
+    // Portrait: the whole width, at the top, leaving the bottom to the touch controls.
+    let portrait = fit(Size(320, 180), in: CGSize(width: 1206, height: 2622))
+    #expect([portrait.originX, portrait.originY, portrait.width] == [0, 0, 1206])
+    #expect(abs(portrait.height - 678.375) < 0.001)
+    // Landscape: the whole height, centered.
+    let landscape = fit(Size(320, 180), in: CGSize(width: 2622, height: 1206))
+    #expect(abs(landscape.width - 2144) < 0.001 && landscape.height == 1206 && landscape.originY == 0 && abs(landscape.originX - 239) < 0.001)
+}

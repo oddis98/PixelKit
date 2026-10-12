@@ -62,7 +62,7 @@ import PixelKitProtocol
     }
 }
 
-/// Shows the game in its own window (or on iOS, the app's screen): the canvas scaled up by whole numbers.
+/// Shows the game in its own window, the canvas scaled up by whole numbers, or on iOS, the app's screen, edge to edge.
 final class GameView: MTKView {
     let loop: Loop
 
@@ -88,7 +88,11 @@ final class GameView: MTKView {
         guard let drawable = currentDrawable, let window = currentRenderPassDescriptor, let commands = loop.tick() else { return }
         let screen = loop.screen
         screen.begin(commands, window)
+        #if os(iOS)
+        screen.encoder.setViewport(fit(screen.size, in: drawableSize))
+        #else
         screen.encoder.setViewport(letterbox(screen.size, in: drawableSize))
+        #endif
         screen.quad(screen.canvas, x: 0, y: 0, source: Rect(x: 0, y: 0, width: screen.size.width, height: screen.size.height))
         screen.end()
         commands.present(drawable)

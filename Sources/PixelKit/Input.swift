@@ -30,8 +30,9 @@ public enum Button: Sendable, CaseIterable {
     ]
     #else
     static var touched: Set<Button> = [] // held on the touch controls
+    static var keys: Set<GCKeyCode> = [] // held on a keyboard, fed by GameViewController
 
-    static let keyMap: [GCKeyCode: Button] = [ // an iPad's keyboard
+    static let keyMap: [GCKeyCode: Button] = [ // an iPad's keyboard, or the Mac's in the editor's preview
         .leftArrow: .left, .keyA: .left, .rightArrow: .right, .keyD: .right, .upArrow: .up, .keyW: .up,
         .downArrow: .down, .keyS: .down, .keyZ: .a, .spacebar: .a, .keyX: .b, .returnOrEnter: .start,
     ]
@@ -43,10 +44,7 @@ public enum Button: Sendable, CaseIterable {
         #if os(macOS)
         now = Set(keys.compactMap { keyMap[$0] })
         #else
-        now = touched
-        if let keyboard = GCKeyboard.coalesced?.keyboardInput {
-            now.formUnion(keyMap.filter { keyboard.button(forKeyCode: $0.key)?.isPressed == true }.values)
-        }
+        now = touched.union(keys.compactMap { keyMap[$0] })
         #endif
         guard let pad = GCController.current?.extendedGamepad else { return }
         let (x, y) = (pad.leftThumbstick.xAxis.value, pad.leftThumbstick.yAxis.value)
