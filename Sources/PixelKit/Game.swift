@@ -108,3 +108,43 @@ public extension Game {
     }
     #endif
 }
+
+/// Keeps a game's progress between runs: any `Codable` value, as `<name>.json` in `~/Library/Application Support/<game>/`
+/// on the Mac (`<game>` being the executable's name, the same when the editor runs it as once it's exported), and in
+/// the app's own Application Support folder on iOS.
+@MainActor public enum Save {
+    static var folder: URL = {
+        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        #if os(macOS)
+        return support.appending(path: ProcessInfo.processInfo.processName)
+        #else
+        return support
+        #endif
+    }()
+
+    /// Saves `value` as `<name>.json` in one step, so quitting halfway never leaves half a save. If it can't, the
+    /// console says why.
+    public static func write(_ value: some Encodable, to name: String) {
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try encoder.encode(value).write(to: folder.appending(path: "\(name).json"), options: .atomic)
+        } catch {
+            print("PixelKit: can't save \(name): \(error.localizedDescription)")
+        }
+    }
+
+    /// What was saved as `<name>.json`; nil if nothing was, or if it no longer decodes because its type changed while
+    /// the game was being made (the console says why).
+    public static func read<Value: Decodable>(_ type: Value.Type, from name: String) -> Value? {
+        let file = folder.appending(path: "\(name).json")
+        guard let data = try? Data(contentsOf: file) else { return nil }
+        do {
+            return try JSONDecoder().decode(type, from: data)
+        } catch {
+            print("PixelKit: \(file.path) no longer reads as \(type), so it's ignored: \(error)")
+            return nil
+        }
+    }
+}

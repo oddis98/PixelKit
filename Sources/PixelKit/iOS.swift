@@ -4,17 +4,22 @@ import UIKit
 #endif
 import CoreGraphics
 
-/// Where the touch controls go in a view of `size` points: a D-pad at the bottom left, and A and B at the bottom
-/// right, clear of the safe area's `left`, `right` and `bottom` insets (rounded corners, the notch).
+/// Where the touch controls go in a view of `size` points: a D-pad at the bottom left, and A, B, X and Y at the bottom
+/// right in a diamond, as on a Super Nintendo's pad (A right, B below, X above, Y left), clear of the safe area's
+/// `left`, `right` and `bottom` insets (rounded corners, the notch).
 struct TouchLayout {
-    static let pad = 50.0, button = 28.0 // radii, in points
-    let dpad, a, b: CGPoint
+    static let pad = 50.0, button = 26.0 // radii, in points
+    static let spread = button * 1.6 // from the diamond's middle to each button's
+    let dpad, a, b, x, y: CGPoint
 
     init(size: CGSize, left: Double, right: Double, bottom: Double) {
         let floor = size.height - max(bottom, 12) - 16
         dpad = CGPoint(x: left + 24 + Self.pad, y: floor - Self.pad)
-        a = CGPoint(x: size.width - right - 24 - Self.button, y: floor - Self.button * 2.2)
-        b = CGPoint(x: a.x - Self.button * 2.6, y: floor - Self.button)
+        let middle = CGPoint(x: size.width - right - 24 - Self.button - Self.spread, y: floor - Self.button - Self.spread)
+        a = CGPoint(x: middle.x + Self.spread, y: middle.y)
+        b = CGPoint(x: middle.x, y: middle.y + Self.spread)
+        x = CGPoint(x: middle.x, y: middle.y - Self.spread)
+        y = CGPoint(x: middle.x - Self.spread, y: middle.y)
     }
 
     /// The buttons a finger at `point` holds. Between two of the D-pad's directions, it holds both.
@@ -26,8 +31,8 @@ struct TouchLayout {
             if abs(dx) > distance * 0.38 { held.insert(dx < 0 ? .left : .right) } // 0.38 ≈ sin 22.5°: eight directions
             if abs(dy) > distance * 0.38 { held.insert(dy < 0 ? .up : .down) }
         }
-        for (center, button) in [(a, Button.a), (b, Button.b)] where hypot(point.x - center.x, point.y - center.y) < Self.button * 1.4 {
-            held.insert(button)
+        for (center, button) in [(a, Button.a), (b, .b), (x, .x), (y, .y)] where hypot(point.x - center.x, point.y - center.y) < Self.button * 1.4 {
+            held.insert(button) // between two, both: one thumb can press two
         }
         return held
     }
@@ -81,7 +86,7 @@ final class GameViewController: UIViewController {
     }
 }
 
-/// A D-pad and A and B buttons, drawn over the game. Every finger on them holds the buttons under it.
+/// A D-pad and A, B, X and Y buttons, drawn over the game. Every finger on them holds the buttons under it.
 final class TouchControls: UIView {
     private var held: Set<Button> = []
 
@@ -125,9 +130,9 @@ final class TouchControls: UIView {
             let center = CGPoint(x: layout.dpad.x + dx * TouchLayout.pad * 0.6, y: layout.dpad.y + dy * TouchLayout.pad * 0.6)
             circle(center, TouchLayout.pad * 0.32, pressed: held.contains(button))
         }
-        for (button, center, name) in [(Button.a, layout.a, "A"), (.b, layout.b, "B")] {
+        for (button, center, name) in [(Button.a, layout.a, "A"), (.b, layout.b, "B"), (.x, layout.x, "X"), (.y, layout.y, "Y")] {
             circle(center, TouchLayout.button, pressed: held.contains(button))
-            let label = NSAttributedString(string: name, attributes: [.font: UIFont.boldSystemFont(ofSize: 20),
+            let label = NSAttributedString(string: name, attributes: [.font: UIFont.boldSystemFont(ofSize: 18),
                                                                       .foregroundColor: UIColor(white: 1, alpha: 0.75)])
             label.draw(at: CGPoint(x: center.x - label.size().width / 2, y: center.y - label.size().height / 2))
         }

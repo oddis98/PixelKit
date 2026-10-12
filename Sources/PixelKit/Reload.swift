@@ -52,6 +52,7 @@ import ObjectiveC
             }
         }
         visit(Scene.current)
+        if let next = Scene.fading?.next { visit(next) } // the scene a fade is going to
         return objects
     }
 

@@ -1,0 +1,141 @@
+import PixelKit
+
+@main struct Village: Game {
+    func start() -> Scene {
+        let progress = Save.read(Progress.self, from: "progress") ?? Progress()
+        return Place("village", progress, position: progress.place)
+    }
+}
+
+/// What the player has done. Each place hands it to the next, so hot reload keeps it (a `static var` would start
+/// over), and coming out of the house saves it.
+final class Progress: Codable {
+    /// Where the player was in the village when the game was saved.
+    var place: Vector?
+    /// The bushes cut in each map, by a pixel of each.
+    var cut: [String: [Vector]] = [:]
+}
+
+/// Tiles of Assets/tiles.png, numbered left to right, then top to bottom.
+enum Tile {
+    static let bush = 4, stump = 5
+}
+
+/// A map to walk around in: the village, or inside the house. Its objects, placed in the map editor, say what's where:
+/// trees, the house's front and the villager, doors with where they lead (`to`) and where you come out (`at`), and
+/// where the game starts.
+final class Place: Scene {
+    let map: String
+    let progress: Progress
+    let player = Entity()
+    var facing: Vector = [0, 1]
+    var doors: [Tilemap.Object] = []
+    /// What's being said, a page at a time, and how much of the first page is typed out.
+    var words: [String] = []
+    var letters = 0.0
+
+    init(_ map: String, _ progress: Progress, at spot: String = "start", position: Vector? = nil) {
+        (self.map, self.progress) = (map, progress)
+        super.init()
+        ySort = true // things draw by where their feet are
+        follow = player
+        background = 0x000000
+        var tiles = Tilemap(map)
+        for point in progress.cut[map] ?? [] { tiles.setTile(Tile.stump, at: point, layer: 0) }
+        for object in tiles.objects {
+            switch object.name {
+            case "tree": add(Thing("tree", base: Rect(x: 11, y: 38, width: 10, height: 8)), at: object.position) // its trunk
+            case "house": add(Thing("house", base: Rect(x: 0, y: -16, width: 80, height: 48)), at: object.position) // and under the eaves
+            case "villager": add(Villager(), at: object.position)
+            case "door": doors.append(object)
+            default: break
+            }
+        }
+        tilemap = tiles
+        player.sprite = Sprite("player")
+        player.hitbox = Rect(x: 3, y: 10, width: 10, height: 6) // the feet, so the head can pass in front of things
+        add(player, at: position ?? tiles.objects(named: spot).first ?? .zero)
+        Music.play(map, fade: 0.5)
+    }
+
+    override func update(_ dt: Double) {
+        super.update(dt)
+        guard let page = words.first else { return walk(dt) }
+        letters = min(letters + dt * 40, Double(page.count)) // 40 letters a second
+        if Input.pressed(.a) { // the rest of the page, then the next one
+            if letters < Double(page.count) { letters = Double(page.count) } else { (words, letters) = (Array(words.dropFirst()), 0) }
+        }
+    }
+
+    /// The D-pad walks; A talks to whoever's in front, X cuts a bush there, and doors lead on.
+    func walk(_ dt: Double) {
+        func axis(_ back: Button, _ on: Button) -> Double { (Input.held(on) ? 1 : 0) - (Input.held(back) ? 1 : 0) }
+        let direction: Vector = [axis(.left, .right), axis(.up, .down)]
+        player.velocity = direction * 60
+        player.move(dt)
+        let (size, feet) = (tilemap!.size, player.hitbox) // the map's edges are walls
+        player.position.x = min(max(player.position.x, Double(-feet.x)), Double(size.width - feet.x - feet.width))
+        player.position.y = min(max(player.position.y, Double(-feet.y)), Double(size.height - feet.y - feet.height))
+        if direction.y != 0 { facing = [0, direction.y] } else if direction.x != 0 { facing = [direction.x, 0] }
+        let looks = facing.y < 0 ? "up" : facing.y > 0 ? "down" : "side"
+        player.sprite?.play(direction == .zero ? looks : "walk-\(looks)")
+        player.sprite?.flipped = facing.x < 0
+
+        let front = player.position + [8, 13] + facing * 10 // just ahead of the feet
+        let reach = Rect(x: Int(front.x) - 4, y: Int(front.y) - 4, width: 8, height: 8)
+        if Input.pressed(.a), let villager = entities.lazy.compactMap({ $0 as? Villager }).first(where: { $0.overlaps(reach) }) {
+            words = villager.words
+        }
+        if Input.pressed(.x), tilemap?.tile(at: front, layer: 0) == Tile.bush {
+            tilemap?.setTile(Tile.stump, at: front, layer: 0)
+            progress.cut[map, default: []].append(front)
+            Sound.play("cut")
+        }
+        if let door = doors.first(where: { player.overlaps($0.box) }), let to = door.properties["to"] {
+            let next = Place(to, progress, at: door.properties["at"] ?? "start")
+            if to == "village" { // coming out of the house saves the game
+                progress.place = next.player.position
+                Save.write(progress, to: "progress")
+            }
+            Scene.fade(to: next)
+        }
+    }
+
+    override func draw(_ screen: Screen) {
+        super.draw(screen)
+        guard let page = words.first else { return }
+        let box = Rect(x: 8, y: screen.size.height - 48, width: screen.size.width - 16, height: 40)
+        screen.panel("textbox", in: box) // Assets/textbox.png, stretched
+        // Wrapped first, so a word doesn't jump to the next line as it's typed.
+        let typed = screen.wrap(page, width: box.width - 16).prefix(Int(letters))
+        screen.text(String(typed), x: Double(box.x + 8), y: Double(box.y + 8))
+        if letters == Double(page.count) { screen.text(">", x: Double(box.x + box.width - 10), y: Double(box.y + box.height - 10)) }
+    }
+}
+
+/// Something big the player walks behind and in front of, like a tree or the house's front. Its base is in the way.
+final class Thing: Entity {
+    init(_ image: String, base: Rect) {
+        super.init()
+        sprite = Sprite(image)
+        hitbox = base
+        solid = true
+    }
+}
+
+/// Stands in the way, and talks when you press A in front of them.
+final class Villager: Entity {
+    let words = [
+        "Hello! Welcome to the village. The house up the path is yours, and the trees around it are older than any of us.",
+        "The hedge by the garden has grown wild again. Stand in front of a bush and press X (C on a keyboard) to cut it.",
+        "Your things are saved whenever you come out of your house.",
+    ]
+
+    override init() {
+        super.init()
+        sprite = Sprite("villager")
+        sprite?.play("idle")
+        hitbox = Rect(x: 3, y: 10, width: 10, height: 6)
+        solid = true
+    }
+}

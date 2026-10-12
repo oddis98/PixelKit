@@ -1,0 +1,1 @@
+{"animations":{"down":{"fps":0,"frames":[0]},"side":{"fps":0,"frames":[4]},"up":{"fps":0,"frames":[2]},"walk-down":{"fps":6,"frames":[0,1]},"walk-side":{"fps":6,"frames":[4,5]},"walk-up":{"fps":6,"frames":[2,3]}},"frameHeight":16,"frameWidth":16}

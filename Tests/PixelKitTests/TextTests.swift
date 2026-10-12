@@ -19,6 +19,16 @@ import Testing
     #expect(Font.builtIn.index(of: "a") == Font.builtIn.index(of: "A") && Font.builtIn.index(of: "é") == Font.builtIn.index(of: "?"))
 }
 
+@Test func textWrapsAtSpacesAndBreaksWordsWiderThanTheWidth() {
+    let font = Font.builtIn // letters advance 4 pixels, the space 2
+    #expect(font.lines("AB CD EF", width: 18) == ["AB CD", "EF"]) // "AB CD" is 18 wide
+    #expect(font.lines("AB CD EF", width: 17) == ["AB", "CD", "EF"])
+    #expect(font.lines("ABCDEFGH I", width: 14) == ["ABC", "DEF", "GH I"]) // too wide for a line: broken where it stops fitting
+    #expect(font.lines("AB\n\nCD EF", width: 100) == ["AB", "", "CD EF"] && font.lines("A", width: 1) == ["A"])
+    #expect(font.size(of: "AB CD EF", width: 18) == Size(18, 12) && font.size(of: "AB CD EF") == Size(28, 6))
+    #expect(font.layout("AB CD EF", width: 18).last.map { [$0.x, $0.y] } == [4, 6]) // F, second on the second line
+}
+
 @MainActor @Test func glyphsAreMeasuredInTheBuiltInArtAndInFontImagesAgainWhenTheyChange() throws {
     let builtIn = Font.builtIn
     #expect(builtIn.columns[builtIn.index(of: ".")!] == 1...1 && builtIn.columns[builtIn.index(of: "A")!] == 0...2)

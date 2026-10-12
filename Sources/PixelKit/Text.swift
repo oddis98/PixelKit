@@ -2,20 +2,28 @@ import ImageIO
 import Metal
 
 public extension Screen {
-    /// Draws `text` with its top-left corner at (x, y), snapped to whole pixels; `\n` starts a new line.
+    /// Draws `text` with its top-left corner at (x, y), snapped to whole pixels; `\n` starts a new line. Given a
+    /// `width` in pixels, it wraps: a word that would go past it starts a new line, and a word wider than that breaks.
     /// `font` is an image cut into glyphs, `Assets/<font>.png`, whose `.json` lists the `characters` they show (draw
     /// one in the pixel editor); without it, a built-in 3x5 font draws. Each glyph takes up the columns it has pixels
     /// in, then 1 pixel of space, and digits all take up the widest one's, so numbers don't shift as they count.
     /// `color` (0xRRGGBB) tints the glyphs, and white leaves them as they are.
-    func text(_ text: String, x: Double, y: Double, font: String? = nil, color: UInt32 = 0xFFFFFF) {
+    func text(_ text: String, x: Double, y: Double, width: Int? = nil, font: String? = nil, color: UInt32 = 0xFFFFFF) {
         let (texture, font) = self.font(font)
-        for glyph in font.layout(text) {
+        for glyph in font.layout(text, width: width) {
             quad(texture, x: x + Double(glyph.x), y: y + Double(glyph.y), source: region(glyph.index, font.glyph, in: texture), color: color)
         }
     }
 
-    /// The size of `text` in pixels, for example to center it: `x: Double(160 - screen.textSize(title).width / 2)`.
-    func textSize(_ text: String, font: String? = nil) -> Size { self.font(font).1.size(of: text) }
+    /// The size of `text` in pixels, wrapped to `width` if you give one, for example to center it:
+    /// `x: Double(160 - screen.textSize(title).width / 2)`.
+    func textSize(_ text: String, width: Int? = nil, font: String? = nil) -> Size { self.font(font).1.size(of: text, width: width) }
+
+    /// `text` with a `\n` wherever `text(_:x:y:width:)` would wrap it. To type out words a letter at a time, draw
+    /// `wrap(words, width: 200).prefix(letters)`: a word then doesn't jump to the next line halfway through.
+    func wrap(_ text: String, width: Int, font: String? = nil) -> String {
+        self.font(font).1.lines(text, width: width).joined(separator: "\n")
+    }
 }
 
 extension Screen {
@@ -81,9 +89,9 @@ struct Font {
         return character.isWhitespace ? nil : characters["?"]
     }
 
-    /// Each glyph of `text` and where its frame goes, relative to the text's top-left corner.
-    func layout(_ text: String) -> [(index: Int, x: Int, y: Int)] {
-        lines(text).enumerated().flatMap { row, line in
+    /// Each glyph of `text`, wrapped to `width` if given, and where its frame goes, relative to the text's top-left corner.
+    func layout(_ text: String, width: Int? = nil) -> [(index: Int, x: Int, y: Int)] {
+        lines(text, width: width).enumerated().flatMap { row, line in
             var x = 0
             return line.compactMap { character -> (index: Int, x: Int, y: Int)? in
                 let (drawn, advance) = place(character)
@@ -93,10 +101,43 @@ struct Font {
         }
     }
 
-    func size(of text: String) -> Size {
-        let lines = lines(text)
-        return Size(lines.map { $0.reduce(0) { $0 + place($1).advance } }.max() ?? 0, lines.count * glyph.height)
+    func size(of text: String, width: Int? = nil) -> Size {
+        let lines = lines(text, width: width)
+        return Size(lines.map(advance).max() ?? 0, lines.count * glyph.height)
     }
+
+    /// The lines `text` draws as: split at `\n`, and given a `width`, at the last space before a word that would go
+    /// past it, or inside a word wider than that.
+    func lines(_ text: String, width: Int? = nil) -> [String] {
+        let paragraphs = text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).map(String.init)
+        guard let width else { return paragraphs }
+        return paragraphs.flatMap { paragraph in
+            var lines: [String] = [], line: String?
+            for word in paragraph.split(separator: " ", omittingEmptySubsequences: false) {
+                if let current = line, advance(current + " " + word) <= width {
+                    line = current + " " + word
+                    continue
+                }
+                if let line { lines.append(line) }
+                var rest = word
+                while rest.count > 1, advance(rest) > width { // wider than a line: break it where it stops fitting
+                    var (fits, x) = (0, 0)
+                    for character in rest {
+                        x += place(character).advance
+                        if x > width { break }
+                        fits += 1
+                    }
+                    lines.append(String(rest.prefix(max(fits, 1))))
+                    rest = rest.dropFirst(max(fits, 1))
+                }
+                line = String(rest)
+            }
+            return lines + [line ?? ""]
+        }
+    }
+
+    /// How far the pen moves over `text`.
+    private func advance(_ text: some StringProtocol) -> Int { text.reduce(0) { $0 + place($1).advance } }
 
     /// The glyph that draws `character` and where its frame goes from the pen, and how far the pen moves on.
     /// The frame starts left of the pen by its empty columns; a digit's is centered in the widest digit's width.
@@ -105,8 +146,6 @@ struct Font {
         let width = ("0"..."9").contains(character) ? max(digits, filled.count) : filled.count
         return ((index, (width - filled.count) / 2 - filled.lowerBound), width + 1)
     }
-
-    private func lines(_ text: String) -> [Substring] { text.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline) }
 }
 
 extension Font {

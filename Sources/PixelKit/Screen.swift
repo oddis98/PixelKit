@@ -1,9 +1,11 @@
+import ImageIO
 import MetalKit
 import PixelKitProtocol
 
 /// The pixel canvas your game draws on. (0, 0) is the top-left pixel.
 @MainActor public final class Screen {
-    let size: Size
+    /// The canvas's size in pixels, the game's `resolution`: for laying out a HUD.
+    public let size: Size
     let device: MTLDevice
     let pipeline: MTLRenderPipelineState
     let canvas: MTLTexture
@@ -18,6 +20,12 @@ import PixelKitProtocol
     var batchTexture: MTLTexture?
     /// The built-in font's glyphs, made on first use.
     lazy var builtInFont = Font.builtInTexture(device)
+    /// One white pixel, which `fill` stretches and tints.
+    lazy var white: MTLTexture = {
+        let texture = device.makeTexture(descriptor: .texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false))!
+        texture.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: [UInt32.max], bytesPerRow: 4)
+        return texture
+    }()
     /// Subtracted from every position; the scene sets it to its camera.
     var offset = Vector.zero
 
@@ -58,29 +66,57 @@ import PixelKitProtocol
         let size = Size(sheet?.frameWidth ?? texture.width, sheet?.frameHeight ?? texture.height)
         var frame = 0
         if let name = sprite.animation {
-            if let animation = sheet?.animations?[name], !animation.frames.isEmpty {
-                frame = animation.frames[Int(sprite.time * animation.fps) % animation.frames.count]
+            if let shown = sheet?.animations?[name]?.frame(at: sprite.time) {
+                frame = shown
             } else if warned.insert("\(sprite.image) \(name)").inserted {
                 print("PixelKit: \(sprite.image).json has no animation \"\(name)\"")
             }
         }
-        quad(texture, x: x, y: y, source: region(frame, size, in: texture), flip: sprite.flipped, color: sprite.color)
+        quad(texture, x: x, y: y, source: region(frame, size, in: texture), flip: sprite.flipped, color: sprite.color, opacity: sprite.opacity)
     }
 
-    /// Draws the tilemap's layers, first to last: only the tiles on the canvas, so levels can be many screens big.
-    /// `Scene` draws its `tilemap` this way.
-    public func draw(_ map: Tilemap) {
+    /// Draws the tilemap's `layers` (all of them unless you say), first to last: only the tiles on the canvas, so
+    /// levels can be many screens big. `Scene` draws its `tilemap` this way, the layers `above` after the entities.
+    public func draw(_ map: Tilemap, layers: [Int]? = nil) {
         let texture = texture(map.tileset)
         let tile = Size(map.tileSize, map.tileSize)
+        let frames = map.frames(sheet(map.tileset)?.animations)
         let (left, top) = (Int(offset.x.rounded(.up)), Int(offset.y.rounded(.up))) // the world pixel `quad` puts in the canvas's corner
         let columns = stride(from: max(map.cell(left), 0), through: min(map.cell(left + size.width - 1), map.width - 1), by: 1)
         let rows = stride(from: max(map.cell(top), 0), through: min(map.cell(top + size.height - 1), map.height - 1), by: 1)
-        for layer in map.layers {
+        for layer in layers ?? Array(map.layers.indices) where map.layers.indices.contains(layer) {
             for row in rows {
                 for column in columns {
-                    guard let cell = layer[row * map.width + column] else { continue }
-                    quad(texture, x: Double(column * map.tileSize), y: Double(row * map.tileSize), source: region(cell, tile, in: texture))
+                    guard let cell = map.layers[layer][row * map.width + column] else { continue }
+                    quad(texture, x: Double(column * map.tileSize), y: Double(row * map.tileSize), source: region(frames[cell] ?? cell, tile, in: texture))
                 }
+            }
+        }
+    }
+
+    /// Fills `box` with a color, 0xRRGGBB, at an `opacity` from 0 to 1: a health bar, a text box's back, or a night
+    /// that darkens the world.
+    public func fill(_ box: Rect, color: UInt32, opacity: Double = 1) {
+        quad(white, x: Double(box.x), y: Double(box.y), source: Rect(x: 0, y: 0, width: 1, height: 1),
+             size: Size(box.width, box.height), color: color, opacity: opacity)
+    }
+
+    /// Draws `Assets/<image>.png` (its first frame, if its `.json` cuts it up) as a box of any size: the image cut
+    /// in thirds each way, its corners as they are, its edges stretched along their length and its middle both ways.
+    /// One frame drawn in the pixel editor makes every text box and menu.
+    public func panel(_ image: String, in box: Rect) {
+        let texture = texture(image)
+        let frame = sheet(image).map { Size($0.frameWidth, $0.frameHeight) } ?? Size(texture.width, texture.height)
+        // Each third's start and length, in the image and in the box. In a box smaller than two corners, they overlap.
+        func thirds(_ image: Int, _ start: Int, _ length: Int) -> [(from: Int, length: Int, to: Int, size: Int)] {
+            let corner = image / 3
+            return [(0, corner, start, corner), (corner, image - corner * 2, start + corner, max(0, length - corner * 2)),
+                    (image - corner, corner, start + length - corner, corner)]
+        }
+        for row in thirds(frame.height, box.y, box.height) {
+            for column in thirds(frame.width, box.x, box.width) where row.size > 0 && column.size > 0 {
+                quad(texture, x: Double(column.to), y: Double(row.to), source: Rect(x: column.from, y: row.from, width: column.length, height: row.length),
+                     size: Size(column.size, row.size))
             }
         }
     }
@@ -133,21 +169,23 @@ import PixelKitProtocol
         }
     }
 
-    /// Queues a textured quad, its pixels multiplied by `color` (0xRRGGBB, where white leaves them as they are).
+    /// Queues a textured quad: `source`, from the texture, stretched over `size` (the same size unless you say), its
+    /// pixels multiplied by `color` (0xRRGGBB, where white leaves them as they are) and `opacity`.
     /// Consecutive quads with the same texture reach the GPU as one draw call.
-    func quad(_ texture: MTLTexture, x: Double, y: Double, source s: Rect, flip: Bool = false, color: UInt32 = 0xFFFFFF) {
+    func quad(_ texture: MTLTexture, x: Double, y: Double, source s: Rect, size: Size? = nil, flip: Bool = false, color: UInt32 = 0xFFFFFF,
+              opacity: Double = 1) {
         if texture !== batchTexture {
             flush()
             batchTexture = texture
         }
         let x0 = Float((x - offset.x).rounded(.down)), y0 = Float((y - offset.y).rounded(.down))
-        let (x1, y1) = (x0 + Float(s.width), y0 + Float(s.height))
+        let (x1, y1) = (x0 + Float(size?.width ?? s.width), y0 + Float(size?.height ?? s.height))
         let (w, h) = (Float(texture.width), Float(texture.height))
         var (u0, u1) = (Float(s.x) / w, Float(s.x + s.width) / w)
         let (v0, v1) = (Float(s.y) / h, Float(s.y + s.height) / h)
         if flip { swap(&u0, &u1) }
         let corners: [SIMD4<Float>] = [[x0, y0, u0, v0], [x1, y0, u1, v0], [x0, y1, u0, v1], [x1, y0, u1, v0], [x1, y1, u1, v1], [x0, y1, u0, v1]]
-        let tint = SIMD4<Float>(Float(color >> 16 & 0xFF), Float(color >> 8 & 0xFF), Float(color & 0xFF), 255) / 255
+        let tint = SIMD4<Float>(Float(color >> 16 & 0xFF) / 255, Float(color >> 8 & 0xFF) / 255, Float(color & 0xFF) / 255, Float(opacity))
         vertices += corners.map { SIMD8(lowHalf: $0, highHalf: tint) }
     }
 
@@ -228,4 +266,18 @@ private let bundledAssets = Bundle.main.url(forResource: "Assets", withExtension
 
 func modificationDate(_ url: URL) -> Date? {
     try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
+}
+
+/// The size of `Assets/<name>.png`'s frames, as its `.json` cuts it up, or of the whole image; nil without one.
+func frameSize(_ name: String) -> Size? {
+    guard let source = CGImageSourceCreateWithURL(assetURL("\(name).png") as CFURL, nil),
+          let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+          let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int else { return nil }
+    let sheet = try? SheetFile(contentsOf: assetURL("\(name).json"))
+    return Size(sheet?.frameWidth ?? width, sheet?.frameHeight ?? height)
+}
+
+extension SheetFile.Animation {
+    /// The frame showing `time` seconds in, looping; nil without frames.
+    func frame(at time: Double) -> Int? { frames.isEmpty ? nil : frames[Int(time * fps) % frames.count] }
 }

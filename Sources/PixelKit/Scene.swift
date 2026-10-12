@@ -8,14 +8,41 @@ import PixelKitProtocol
 
     /// Everything in the scene, in the order it updates and draws.
     public private(set) var entities: [Entity] = []
-    /// The level's tiles, drawn behind the entities. `Entity.move(_:)` stops against its solid ones.
+    /// The level's tiles, drawn behind the entities but for its layers `above` them. `Entity.move(_:)` stops against
+    /// its solid ones.
     public var tilemap: Tilemap?
     /// Top-left corner of the view, in world pixels.
     public var camera = Vector.zero
+    /// An entity the camera keeps in the middle of the view, never showing past the tilemap's edges. A map smaller
+    /// than the view sits in the middle of it. It sets `camera` each time the scene draws.
+    public var follow: Entity?
+    /// Draws the entities from the top of the view down by their `sortY`, their feet, so they pass behind and in front
+    /// of each other and of trees and houses: for top-down games. Off, they draw in the order they were added.
+    public var ySort = false
     /// Clear color as 0xRRGGBB.
     public var background: UInt32 = 0x1D2B53
 
     public init() {}
+
+    /// Switches to `next` through `color`: this scene stands still while the view fades to the color over the first
+    /// half of `duration` seconds, then `next` becomes `current` and updates while it fades back in. The fade covers
+    /// everything, a HUD too, and pauses with the game. `Scene.current = next` switches at once instead.
+    public static func fade(to next: Scene, duration: Double = 0.5, color: UInt32 = 0x000000) {
+        guard duration > 0 else { return current = next }
+        fading = Fade(next: next, duration: duration, color: color)
+    }
+
+    /// The fade under way, if any.
+    static var fading: Fade?
+
+    /// One update of the game: the current scene's, unless it's fading out.
+    static func tick(_ dt: Double) {
+        guard var fade = fading else { return current.update(dt) }
+        fade.time += dt
+        if let next = fade.next, fade.time >= fade.duration / 2 { (current, fade.next) = (next, nil) }
+        fading = fade.time < fade.duration ? fade : nil
+        if fade.next == nil { current.update(dt) }
+    }
 
     /// Puts an entity in the scene with its top-left corner at `position`, in world pixels.
     public func add(_ entity: Entity, at position: Vector) {
@@ -36,15 +63,45 @@ import PixelKitProtocol
             entity.update(dt)
             entity.sprite?.time += dt
         }
+        tilemap?.time += dt
     }
 
     /// Call super to draw the tilemap and entities, then draw anything on top (like a HUD) in screen pixels.
     open func draw(_ screen: Screen) {
+        if let follow { camera = Self.camera(following: follow.box(at: follow.position), view: screen.size, map: tilemap?.size) }
         screen.offset = camera.rounded(.down)
-        if let tilemap { screen.draw(tilemap) }
-        for entity in entities { entity.draw(screen) }
+        if let tilemap { screen.draw(tilemap, layers: tilemap.layers.indices.filter { !tilemap.above.contains($0) }) }
+        for entity in drawOrder { entity.draw(screen) }
+        if let tilemap, !tilemap.above.isEmpty { screen.draw(tilemap, layers: tilemap.above.sorted()) }
         screen.offset = .zero
     }
+
+    /// The order the entities draw in: as they were added, or with `ySort` by `sortY`, ties as they were added.
+    var drawOrder: [Entity] {
+        guard ySort else { return entities }
+        return entities.enumerated().sorted { ($0.element.sortY, $0.offset) < ($1.element.sortY, $1.offset) }.map(\.element)
+    }
+
+    /// The camera that puts `box` in the middle of a `view`, kept inside a `map` of that size, or in the middle of a
+    /// map smaller than the view. Whole pixels, so sprites don't shimmer against the tiles.
+    nonisolated static func camera(following box: Rect, view: Size, map: Size?) -> Vector {
+        func axis(_ middle: Int, _ view: Int, _ map: Int?) -> Double {
+            guard let map else { return Double(middle - view / 2) }
+            return Double(map < view ? (map - view) / 2 : min(max(middle - view / 2, 0), map - view))
+        }
+        return [axis(box.x + box.width / 2, view.width, map?.width), axis(box.y + box.height / 2, view.height, map?.height)]
+    }
+}
+
+/// A switch to another scene through a color, from `Scene.fade(to:duration:color:)`.
+struct Fade {
+    var next: Scene? // until the switch, halfway through
+    let duration: Double
+    let color: UInt32
+    var time = 0.0
+
+    /// How much of the color covers the view: from none to all of it at the switch, then back.
+    var opacity: Double { max(0, 1 - abs(time / duration * 2 - 1)) }
 }
 
 /// Anything that lives in a scene: the player, enemies, pickups.
@@ -57,6 +114,8 @@ import PixelKitProtocol
     public var hitbox = Rect(x: 0, y: 0, width: 16, height: 16)
     /// What it looks like, drawn at `position`; nil draws nothing.
     public var sprite: Sprite?
+    /// Blocks other entities' `move(_:)`, as solid tiles do: villagers, chests, tree trunks.
+    public var solid = false
     /// The scene it's in, from `Scene.add(_:at:)`.
     public internal(set) weak var scene: Scene?
     var remainder = Vector.zero // sub-pixel movement not applied yet
@@ -71,7 +130,13 @@ import PixelKitProtocol
         if let sprite { screen.draw(sprite, x: position.x, y: position.y) }
     }
 
-    /// Moves by `velocity * dt` one pixel at a time, stopping flush against solid tiles.
+    /// Where it draws when the scene's `ySort` is on, in world pixels: the bottom of its hitbox, its feet, so the
+    /// hitbox of a tree is its trunk. Override it for something always under the rest, like a shadow (`-.infinity`),
+    /// or over it, like a bird.
+    open var sortY: Double { Double(box(at: position).y + hitbox.height) }
+
+    /// Moves by `velocity * dt` one pixel at a time, stopping flush against solid tiles and solid entities (but not
+    /// those it already overlaps, so two that start on top of each other can walk apart).
     /// Hitting something zeroes that part of the velocity.
     public func move(_ dt: Double) {
         remainder += velocity * dt
@@ -83,23 +148,36 @@ import PixelKitProtocol
         }
     }
 
-    /// Standing on a solid tile.
-    public var onGround: Bool { solid(at: position + [0, 1]) }
+    /// Standing on a solid tile or entity.
+    public var onGround: Bool { blocked(at: position + [0, 1]) }
 
     /// True when the two hitboxes overlap.
     public func overlaps(_ other: Entity) -> Bool { box(at: position).intersects(other.box(at: other.position)) }
+
+    /// True when the hitbox overlaps `box`, in world pixels, like a door's from `Tilemap.Object.box`.
+    public func overlaps(_ box: Rect) -> Bool { self.box(at: position).intersects(box) }
 
     func slide(_ pixels: Int, axis: Int) -> Bool {
         for _ in 0..<abs(pixels) {
             var next = position
             next[axis] += Double(pixels.signum())
-            if solid(at: next) { return false }
+            if blocked(at: next) { return false }
             position = next
         }
         return true
     }
 
-    func solid(at position: Vector) -> Bool { scene?.tilemap?.isSolid(box(at: position)) ?? false }
+    /// Whether a solid tile, or a solid entity it doesn't overlap already, is in the way at `position`.
+    // ponytail: scans every entity each pixel step; a grid of cells when a level holds thousands of solid things
+    func blocked(at position: Vector) -> Bool {
+        let (box, here) = (box(at: position), box(at: self.position))
+        if scene?.tilemap?.isSolid(box) == true { return true }
+        return scene?.entities.contains { other in
+            guard other.solid, other !== self else { return false }
+            let theirs = other.box(at: other.position)
+            return theirs.intersects(box) && !theirs.intersects(here)
+        } ?? false
+    }
 
     func box(at position: Vector) -> Rect {
         let p = position.rounded(.down)
@@ -119,6 +197,8 @@ public struct Sprite: Sendable {
     /// Multiplies the sprite's pixels, as 0xRRGGBB: red (0xFF0000) for a hurt flash, or a color variant of light art.
     /// White, the default, leaves them as they are.
     public var color: UInt32 = 0xFFFFFF
+    /// From 0, invisible, to 1, the default: for ghosts, or things that fade out.
+    public var opacity = 1.0
     var time = 0.0
 
     public init(_ image: String) { self.image = image }
@@ -144,6 +224,8 @@ public struct Tilemap: Sendable {
     public var width, height: Int
     /// Each layer's tiles row by row, `layers[layer][row * width + column]`; nil is empty. The first layer draws first.
     public var layers: [[Int?]]
+    /// The layers that draw over the entities, like roofs and treetops, by their index in `layers`.
+    public var above: Set<Int> = []
     /// Tile numbers that block movement, in any layer.
     public var solid: Set<Int>
     /// Things placed in the level with the map editor's Objects tool, like coins or where the player starts.
@@ -151,6 +233,8 @@ public struct Tilemap: Sendable {
     var name: String? // the .tilemap it came from
     var modified: [Date?] = [] // when it and the tileset's .json were last changed, as loaded
     var removed: Set<Int> = [] // what removeTiles took out, kept out when the map reloads
+    var edits: [SIMD3<Int>: Int?] = [:] // what setTile put down, by layer, column and row, kept when the map reloads
+    var time = 0.0 // for animated tiles, advanced by the scene's updates
 
     /// Something placed in the level with the map editor's Objects tool.
     public struct Object: Sendable {
@@ -160,6 +244,11 @@ public struct Tilemap: Sendable {
         public var position: Vector
         /// Settings typed for it, like "speed": "40".
         public var properties: [String: String]
+        var size: Size
+
+        /// Where it is and how big, in pixels: the size it was given in the map editor, or else, as the editor shows
+        /// it, the size of the image it's named after, or one tile. For zones like doors: `player.overlaps(door.box)`.
+        public var box: Rect { Rect(x: Int(position.x), y: Int(position.y), width: size.width, height: size.height) }
     }
 
     /// Loads `Assets/<name>.tilemap`, made in the tilemap editor. The tile size and which tiles are solid
@@ -178,10 +267,20 @@ public struct Tilemap: Sendable {
         let sheet = try SheetFile(contentsOf: sheetURL)
         (tileset, tileSize, width, height) = (map.tileset, sheet.frameWidth, map.width, map.height)
         layers = map.layers.map { $0.tiles.map { $0 < 0 ? nil : $0 } }
+        above = Set(map.layers.indices.filter { map.layers[$0].above == true })
         solid = Set(sheet.solid ?? [])
-        objects = (map.objects ?? []).map { Object(name: $0.name, position: [Double($0.x), Double($0.y)], properties: $0.properties ?? [:]) }
+        var images: [String: Size?] = [:] // the frame size of each name's image, read once
+        objects = (map.objects ?? []).map { object in
+            if images[object.name] == nil { images[object.name] = .some(frameSize(object.name)) }
+            let size = images[object.name]! ?? Size(tileSize, tileSize)
+            return Object(name: object.name, position: [Double(object.x), Double(object.y)], properties: object.properties ?? [:],
+                          size: Size(object.width ?? size.width, object.height ?? size.height))
+        }
         (self.name, modified) = (name, [modificationDate(url), modificationDate(sheetURL)])
         for tile in removed { _ = removeTiles(tile) }
+        for (cell, tile) in edits where layers.indices.contains(cell.x) && (0..<width).contains(cell.y) && (0..<height).contains(cell.z) {
+            layers[cell.x][cell.z * width + cell.y] = tile
+        }
     }
 
     /// Loads the map again if its files changed. One that can't be read keeps the map as it is.
@@ -204,6 +303,35 @@ public struct Tilemap: Sendable {
 
     /// Size in pixels.
     public var size: Size { Size(width * tileSize, height * tileSize) }
+
+    /// The tile at world pixel `point` in `layer`, or nil for an empty cell or outside the map: what's under the
+    /// player's feet, or in front of them.
+    public func tile(at point: Vector, layer: Int) -> Int? {
+        guard let i = index(point), layers.indices.contains(layer) else { return nil }
+        return layers[layer][i]
+    }
+
+    /// Puts `tile` at world pixel `point` in `layer`, or empties the cell with nil: cut a bush, till soil, build a
+    /// wall. Outside the map it does nothing. The change stays when the map reloads as it's edited in the editor.
+    public mutating func setTile(_ tile: Int?, at point: Vector, layer: Int) {
+        guard let i = index(point), layers.indices.contains(layer) else { return }
+        layers[layer][i] = tile
+        edits.updateValue(tile, forKey: [layer, i % width, i / width]) // not `edits[…] = tile`, which removes it when nil
+    }
+
+    /// The cell world pixel `point` is in, as an index into a layer; nil outside the map.
+    private func index(_ point: Vector) -> Int? {
+        let (column, row) = (cell(Int(point.x.rounded(.down))), cell(Int(point.y.rounded(.down))))
+        return (0..<width).contains(column) && (0..<height).contains(row) ? row * width + column : nil
+    }
+
+    /// The frame each animated tile shows now: an animation in the tileset's `.json` named after a tile's number
+    /// ("12") plays wherever that tile is, for water, flowers and torches.
+    func frames(_ animations: [String: SheetFile.Animation]?) -> [Int: Int] {
+        (animations ?? [:]).reduce(into: [:]) { frames, animation in
+            if let tile = Int(animation.key), let frame = animation.value.frame(at: time) { frames[tile] = frame }
+        }
+    }
 
     /// Where each object called `name` is (its top-left corner, in pixels).
     public func objects(named name: String) -> [Vector] { objects.filter { $0.name == name }.map(\.position) }

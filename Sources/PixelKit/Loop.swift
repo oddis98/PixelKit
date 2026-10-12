@@ -52,13 +52,17 @@ import PixelKitProtocol
             red: Double(rgb >> 16 & 0xFF) / 255, green: Double(rgb >> 8 & 0xFF) / 255, blue: Double(rgb & 0xFF) / 255, alpha: 1)
         screen.begin(commands, canvas)
         scene.draw(screen)
+        if let fade = Scene.fading {
+            screen.offset = .zero
+            screen.fill(Rect(x: 0, y: 0, width: screen.size.width, height: screen.size.height), color: fade.color, opacity: fade.opacity)
+        }
         screen.end()
         return commands
     }
 
     func update() {
         Input.poll()
-        Scene.current.update(Self.step)
+        Scene.tick(Self.step)
     }
 }
 

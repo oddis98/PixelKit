@@ -27,9 +27,10 @@ import AVFoundation
     }
 
     /// Loops `Assets/<name>` (.wav, .m4a, .mp3 or .caf). Playing the track that's already on keeps it going, so a
-    /// scene can call this every time it starts.
-    public static func play(_ name: String) {
-        if name != track { start(name, audioPlayer(name)) }
+    /// scene can call this every time it starts. Given a `fade` in seconds, the old track fades out as this one fades
+    /// in, so a house's music doesn't cut into the village's.
+    public static func play(_ name: String, fade: Double = 0) {
+        if name != track { start(name, audioPlayer(name), fade: fade) }
     }
 
     /// Stops the music.
@@ -50,11 +51,20 @@ import AVFoundation
         start(track, new)
     }
 
-    private static func start(_ name: String, _ new: AVAudioPlayer) {
-        player?.stop()
+    private static func start(_ name: String, _ new: AVAudioPlayer, fade: Double = 0) {
+        if let old = player, fade > 0 {
+            old.setVolume(0, fadeDuration: fade)
+            Task { // the old player plays on until it's silent
+                try? await Task.sleep(for: .seconds(fade))
+                old.stop()
+            }
+        } else {
+            player?.stop()
+        }
         new.numberOfLoops = -1
-        new.volume = Float(volume)
+        new.volume = fade > 0 ? 0 : Float(volume)
         if !paused { new.play() }
+        if fade > 0 { new.setVolume(Float(volume), fadeDuration: fade) }
         (player, track, modified) = (new, name, new.url.flatMap(modificationDate))
     }
 }

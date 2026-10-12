@@ -63,10 +63,11 @@ public struct TilemapFile: AssetFile, Equatable, Sendable {
         public var name: String
         /// Tile numbers row by row; -1 is empty.
         public var tiles: [Int]
+        /// Draws over the objects and entities, like roofs and treetops; nil is false.
+        public var above: Bool?
 
-        public init(name: String, tiles: [Int]) {
-            self.name = name
-            self.tiles = tiles
+        public init(name: String, tiles: [Int], above: Bool? = nil) {
+            (self.name, self.tiles, self.above) = (name, tiles, above)
         }
     }
 
@@ -77,9 +78,12 @@ public struct TilemapFile: AssetFile, Equatable, Sendable {
         public var y: Int
         /// Settings for the game, like "speed": "40".
         public var properties: [String: String]?
+        /// Size in pixels, for zones like doors; nil is as big as the image named after it, or one tile.
+        public var width: Int?
+        public var height: Int?
 
-        public init(name: String, x: Int, y: Int, properties: [String: String]? = nil) {
-            (self.name, self.x, self.y, self.properties) = (name, x, y, properties)
+        public init(name: String, x: Int, y: Int, properties: [String: String]? = nil, width: Int? = nil, height: Int? = nil) {
+            (self.name, self.x, self.y, self.properties, self.width, self.height) = (name, x, y, properties, width, height)
         }
     }
 
