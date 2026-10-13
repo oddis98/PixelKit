@@ -29,6 +29,8 @@ final class Place: Scene {
     let progress: Progress
     let player = Entity()
     var facing: Vector = [0, 1]
+    /// Where a click or a tap sent the player, around what's in the way.
+    var route: [Vector] = []
     var doors: [Tilemap.Object] = []
     /// What's being said, a page at a time, and how much of the first page is typed out.
     var words: [String] = []
@@ -48,6 +50,8 @@ final class Place: Scene {
         doors = tiles.objects.filter { $0.name == .door }
         player.sprite = Sprite(.player)
         player.hitbox = Rect(x: 3, y: 10, width: 10, height: 6) // the feet, so the head can pass in front of things
+        player.cornerSlide = 4 // slides around a tree or into a doorway it's a few pixels off
+        player.solid = true // so the villager waits for them
         add(player, at: position ?? tiles.objects(named: spot).first ?? .zero)
         Music.play(SoundName(map.name), fade: 0.5) // each place's music is named after its map
     }
@@ -61,16 +65,24 @@ final class Place: Scene {
         }
     }
 
-    /// The D-pad walks; A talks to whoever's in front, X cuts a bush there, and doors lead on.
+    /// The D-pad walks, and so does a click or a tap, to where it points; A talks to whoever's in front, X cuts a bush
+    /// there, and doors lead on.
     func walk(_ dt: Double) {
         func axis(_ back: Button, _ on: Button) -> Double { (Input.held(on) ? 1 : 0) - (Input.held(back) ? 1 : 0) }
-        let direction: Vector = [axis(.left, .right), axis(.up, .down)]
-        player.velocity = direction * 60
-        player.move(dt)
+        var direction: Vector = [axis(.left, .right), axis(.up, .down)]
+        if Input.pressed(.pointer), let point = Input.pointer { route = player.path(to: point + camera, diagonals: true) ?? [] }
+        if direction == .zero, !route.isEmpty {
+            player.walk(dt, along: &route, speed: 60)
+            direction = player.velocity
+        } else {
+            route = [] // the D-pad takes over
+            player.velocity = direction * 60
+            player.move(dt)
+        }
         let (size, feet) = (tilemap!.size, player.hitbox) // the map's edges are walls
         player.position.x = min(max(player.position.x, Double(-feet.x)), Double(size.width - feet.x - feet.width))
         player.position.y = min(max(player.position.y, Double(-feet.y)), Double(size.height - feet.y - feet.height))
-        if direction.y != 0 { facing = [0, direction.y] } else if direction.x != 0 { facing = [direction.x, 0] }
+        if direction != .zero { facing = heading(direction) }
         let looks = facing.y < 0 ? "up" : facing.y > 0 ? "down" : "side"
         player.sprite?.play(direction == .zero ? looks : "walk-\(looks)")
         player.sprite?.flipped = facing.x < 0
@@ -107,11 +119,41 @@ final class Place: Scene {
     }
 }
 
-/// Stands in the way, and talks when you press A in front of them: a page for each of their words, a list in
-/// Assets/Objects/villager.object that each villager placed in a map can change. Their sprite, hitbox and solidity are
-/// there too.
+/// Up, down, left or right, whichever `way` is most, up or down when it's as much one as the other.
+func heading(_ way: Vector) -> Vector { abs(way.y) >= abs(way.x) ? [0, way.y < 0 ? -1 : 1] : [way.x < 0 ? -1 : 1, 0] }
+
+/// Stands in the way, strolls to each of their spots in turn and back, around the hedge or through it once it's cut,
+/// and talks when you press A in front of them: a page for each of their words. Both are lists in
+/// Assets/Objects/villager.object that each villager placed in a map can change: spots are points chosen on the map.
+/// Their sprite, hitbox and solidity are there too.
 final class Villager: Entity, Placeable {
     lazy var words = object?.list("words", of: String.self) ?? []
+    /// Where they go next, then after: their spots, and back where they were placed.
+    lazy var spots = (object?.list("spots", of: Vector.self) ?? []) + [middle]
+    var route: [Vector] = []
+    var rest = 4.0 // seconds before they set off again
+    var held = 0.0 // seconds someone's been in their way
+
+    override func update(_ dt: Double) {
+        if (scene as? Place)?.words.isEmpty == false || spots.count < 2 { // they stop to talk
+            velocity = .zero
+        } else if !route.isEmpty || rest <= 0 {
+            if route.isEmpty { // off to the next spot, the way as it is now
+                route = path(to: spots[0]) ?? []
+                spots.append(spots.removeFirst())
+                rest = 4
+            }
+            let from = position
+            walk(dt, along: &route, speed: 30)
+            held = position == from ? held + dt : 0
+            if held > 1, let spot = route.last { (route, held) = (path(to: spot) ?? [], 0) } // around them
+        } else {
+            rest -= dt
+        }
+        let way = heading(velocity), looks = way.y < 0 ? "up" : way.y > 0 ? "down" : "side"
+        sprite?.play(velocity == .zero ? "idle" : "walk-\(looks)")
+        sprite?.flipped = velocity != .zero && way.x < 0
+    }
 }
 
 /// The house's fire, which lights it in the dark, flickering as flames do.

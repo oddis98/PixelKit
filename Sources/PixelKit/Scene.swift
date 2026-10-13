@@ -247,6 +247,11 @@ struct Change {
     public var object: Tilemap.Object?
     /// The light it gives off in a dark scene (`Scene.darkness`), from its middle, like a torch's; nil gives none.
     public var light: Light?
+    /// How deep a corner can be, in pixels, for `move(_:)` to nudge the entity around it instead of stopping: going
+    /// straight left, right, up or down into something that catches no more of its hitbox than that, it slides sideways
+    /// past, as top-down games since Zelda do. About 4 for a top-down game's player. 0, the default, stops it flush, as
+    /// a platformer wants: its player would slip off a ledge it lands on by a few pixels.
+    public var cornerSlide = 0
     var remainder = Vector.zero // sub-pixel movement not applied yet
 
     public init() {}
@@ -295,16 +300,65 @@ struct Change {
     open var sortY: Double { Double(box(at: position).y + hitbox.height) }
 
     /// Moves by `velocity * dt` one pixel at a time, stopping flush against solid tiles and solid entities (but not
-    /// those it already overlaps, so two that start on top of each other can walk apart).
-    /// Hitting something zeroes that part of the velocity.
+    /// those it already overlaps, so two that start on top of each other can walk apart), or with `cornerSlide` sliding
+    /// around their corners. Hitting something zeroes that part of the velocity.
     public func move(_ dt: Double) {
+        let straight = velocity.x == 0 || velocity.y == 0 // only that slides around corners, not a diagonal
         remainder += velocity * dt
         let pixels = remainder.rounded(.toNearestOrAwayFromZero)
         remainder -= pixels
-        for axis in 0..<2 where !slide(Int(pixels[axis]), axis: axis) {
+        for axis in 0..<2 where !slide(Int(pixels[axis]), axis: axis, aroundCorners: straight) {
             velocity[axis] = 0
             remainder[axis] = 0
         }
+    }
+
+    /// The middle of its hitbox, in whole world pixels: where it walks from and to on a path, and where another
+    /// entity heads to reach it: `enemy.path(to: player.middle)`.
+    public var middle: Vector {
+        let box = box(at: position)
+        return [Double(box.x + box.width / 2), Double(box.y + box.height / 2)]
+    }
+
+    /// The way to `point`, in world pixels, around the map's solid tiles and the scene's other solid entities: the
+    /// middle of each cell of the map to walk through, from the one after the cell its `middle` is in to the one
+    /// `point` is in, for `walk(_:along:speed:)`. Steps go to a cell beside, above or below, or with `diagonals` to one
+    /// at a corner too, but never past the corner of a cell that's in the way. Nil when there's no way there: `point`
+    /// is in a solid tile, either is off the map, or there's no tilemap. A cell is in the way when a solid entity is
+    /// in it, but for the one `point` is in, so the way can lead to another entity, like a solid player being chased.
+    /// A hitbox no bigger than a tile, walked by its middle, fits through every cell on the way.
+    public func path(to point: Vector, diagonals: Bool = false) -> [Vector]? {
+        guard let scene, let map = scene.tilemap else { return nil }
+        let (size, goal) = (map.tileSize, map.cell(at: point))
+        var taken: Set<SIMD2<Int>> = [] // cells solid entities are in
+        for other in scene.entities where other.solid && other !== self {
+            let box = other.box(at: other.position)
+            for row in stride(from: map.cell(box.y), through: map.cell(box.y + box.height - 1), by: 1) {
+                for column in stride(from: map.cell(box.x), through: map.cell(box.x + box.width - 1), by: 1) { taken.insert([column, row]) }
+            }
+        }
+        taken.remove(goal)
+        let cells = map.route(from: map.cell(at: middle), to: goal, diagonals: diagonals) { cell in
+            !taken.contains(cell) && !map.isSolid(Rect(x: cell.x * size, y: cell.y * size, width: size, height: size))
+        }
+        return cells?.map { [Double($0.x * size + size / 2), Double($0.y * size + size / 2)] }
+    }
+
+    /// Walks along `path`, points in world pixels like those `path(to:)` finds, at `speed` pixels a second: heads for
+    /// the first until its `middle` is there, takes it off and heads for the next, and stops, its velocity zero, once
+    /// there are none. It moves as `move(_:)` does, so something solid in the way holds it up until it's gone. Call it
+    /// in each update instead of `move(_:)`: `walk(dt, along: &route, speed: 40)`.
+    public func walk(_ dt: Double, along path: inout [Vector], speed: Double) {
+        func reached(_ point: Vector) -> Bool { ((point - middle) * (point - middle)).sum() < 1 } // within a pixel
+        while let point = path.first, reached(point) { path.removeFirst() }
+        guard let point = path.first else { return velocity = .zero }
+        let way = point - middle, distance = (way * way).sum().squareRoot()
+        if distance <= speed * dt { (velocity, remainder) = (way / dt, .zero) } // there in this update, not past it
+        else { velocity = way / distance * speed }
+        move(dt)
+        guard reached(point) else { return }
+        path.removeFirst()
+        if path.isEmpty { velocity = .zero }
     }
 
     /// Standing on a solid tile or entity.
@@ -320,14 +374,41 @@ struct Change {
     /// `if Input.pressed(.pointer), let point = Input.pointer, chest.contains(point + camera)`.
     public func contains(_ point: Vector) -> Bool { box(at: position).contains(point) }
 
-    func slide(_ pixels: Int, axis: Int) -> Bool {
+    /// Moves `pixels` along `axis` (0 for x, 1 for y) a pixel at a time, or around a corner a pixel sideways for each
+    /// pixel it's held up; false once it can do neither.
+    func slide(_ pixels: Int, axis: Int, aroundCorners: Bool) -> Bool {
+        let step = Double(pixels.signum())
         for _ in 0..<abs(pixels) {
             var next = position
-            next[axis] += Double(pixels.signum())
-            if blocked(at: next) { return false }
-            position = next
+            next[axis] += step
+            if !blocked(at: next) {
+                position = next
+            } else if aroundCorners, let side = side(around: axis, step) {
+                position[1 - axis] += side
+            } else {
+                return false
+            }
         }
         return true
+    }
+
+    /// Which way across `axis`, -1 or 1, it gets past what holds it up going `step` along it, by moving no more than
+    /// `cornerSlide` pixels sideways first, the nearer way if both do; nil if neither does, as at a wall.
+    func side(around axis: Int, _ step: Double) -> Double? {
+        var sides: [Double] = [-1, 1]
+        for depth in stride(from: 1.0, through: Double(cornerSlide), by: 1) {
+            for side in sides {
+                var aside = position
+                aside[1 - axis] += side * depth
+                if blocked(at: aside) { // a wall that way too
+                    sides.removeAll { $0 == side }
+                    continue
+                }
+                aside[axis] += step
+                if !blocked(at: aside) { return side }
+            }
+        }
+        return nil
     }
 
     /// Whether a solid tile, or a solid entity it doesn't overlap already, is in the way at `position`.
@@ -631,6 +712,87 @@ public struct Tilemap: Sendable {
 
     /// Which cell a pixel is in, rounding toward -∞ so pixels left of or above the map get negative cells.
     func cell(_ pixel: Int) -> Int { pixel >= 0 ? pixel / tileSize : (pixel + 1) / tileSize - 1 }
+
+    /// The cell, its column and row, that world pixel `point` is in.
+    func cell(at point: Vector) -> SIMD2<Int> { [cell(Int(point.x.rounded(.down))), cell(Int(point.y.rounded(.down)))] }
+
+    /// The shortest way from cell `start` to cell `goal` through the map's cells that are `free`, by A*: the cells
+    /// after `start` to `goal`, or nil when there's none, or `goal` isn't free or is off the map. Steps go to a cell
+    /// beside, above or below, or with `diagonals` to one at a corner when both cells beside that corner are free too.
+    /// Of the shortest ways, it takes one that turns the fewest times, as someone walking would.
+    // ponytail: arrays of the map's size times its steps for each search; a dictionary of the states it looks at if
+    // maps get so big that filling them is slow.
+    func route(from start: SIMD2<Int>, to goal: SIMD2<Int>, diagonals: Bool, free: (SIMD2<Int>) -> Bool) -> [SIMD2<Int>]? {
+        func inside(_ x: Int, _ y: Int) -> Bool { (0..<width).contains(x) && (0..<height).contains(y) }
+        guard inside(start.x, start.y), inside(goal.x, goal.y), free(goal) else { return nil }
+        var known = [UInt8](repeating: 0, count: width * height) // each cell's `free`, asked once: 1 free, 2 not
+        func open(_ x: Int, _ y: Int) -> Bool {
+            guard inside(x, y) else { return false }
+            if known[y * width + x] == 0 { known[y * width + x] = free([x, y]) ? 1 : 2 }
+            return known[y * width + x] == 1
+        }
+        let steps = [(1, 0), (0, 1), (-1, 0), (0, -1)] + (diagonals ? [(1, 1), (-1, 1), (-1, -1), (1, -1)] : [])
+        // A state is a cell and the step into it (the start's is none, `steps.count`), so a turn can cost something: 1,
+        // where a step costs 10,000 across and 14,000 diagonally, so turns only choose among the shortest ways.
+        let ways = steps.count + 1
+        func estimate(_ x: Int, _ y: Int) -> Int {
+            let (x, y) = (abs(x - goal.x), abs(y - goal.y))
+            return (diagonals ? 10 * max(x, y) + 4 * min(x, y) : 10 * (x + y)) * 1000
+        }
+        var cost = [Int](repeating: .max, count: width * height * ways), came = [Int](repeating: -1, count: width * height * ways)
+        // The least each cell costs to reach, from any side. A state that costs more is left out: going on from the
+        // cheapest instead costs at most a turn more, and that's no more.
+        var least = [Int](repeating: .max, count: width * height)
+        let first = (start.y * width + start.x) * ways + steps.count
+        (cost[first], least[start.y * width + start.x]) = (0, 0)
+        // A binary heap of states to go on from: the one whose way through it, as estimated, is shortest, then the one
+        // nearer the goal, then the one added last (`rest`: the estimate in the high bits, less the count added before).
+        var heap = [(f: estimate(start.x, start.y), rest: estimate(start.x, start.y) << 32, state: first)]
+        func before(_ a: Int, _ b: Int) -> Bool { heap[a].f < heap[b].f || heap[a].f == heap[b].f && heap[a].rest < heap[b].rest }
+        var added = 0, found: Int?
+        while !heap.isEmpty {
+            heap.swapAt(0, heap.count - 1)
+            let (f, _, state) = heap.removeLast()
+            var i = 0
+            while true { // sift down
+                var next = i
+                if 2 * i + 1 < heap.count, before(2 * i + 1, next) { next = 2 * i + 1 }
+                if 2 * i + 2 < heap.count, before(2 * i + 2, next) { next = 2 * i + 2 }
+                if next == i { break }
+                heap.swapAt(i, next)
+                i = next
+            }
+            let (x, y) = (state / ways % width, state / ways / width)
+            guard f - estimate(x, y) == cost[state], cost[state] <= least[y * width + x] else { continue } // bettered since
+            if x == goal.x, y == goal.y {
+                found = state
+                break
+            }
+            for way in steps.indices {
+                let (dx, dy) = steps[way], (nx, ny) = (x + dx, y + dy)
+                guard open(nx, ny), dx == 0 || dy == 0 || open(nx, y) && open(x, ny) else { continue } // no corner cut
+                let turn = state % ways == way || state % ways == steps.count ? 0 : 1
+                let total = cost[state] + (dx != 0 && dy != 0 ? 14_000 : 10_000) + turn
+                let after = (ny * width + nx) * ways + way
+                guard total < cost[after], total <= least[ny * width + nx] else { continue }
+                (cost[after], came[after], least[ny * width + nx]) = (total, state, total)
+                added += 1
+                heap.append((total + estimate(nx, ny), estimate(nx, ny) << 32 - added, after))
+                var j = heap.count - 1
+                while j > 0, before(j, (j - 1) / 2) { // sift up
+                    heap.swapAt(j, (j - 1) / 2)
+                    j = (j - 1) / 2
+                }
+            }
+        }
+        guard var state = found else { return nil }
+        var cells: [SIMD2<Int>] = []
+        while came[state] >= 0 {
+            cells.append([state / ways % width, state / ways / width])
+            state = came[state]
+        }
+        return cells.reversed()
+    }
 }
 
 /// What has properties from the editor, typed there and kept as text: a map's objects, and its tiles
