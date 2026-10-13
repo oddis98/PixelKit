@@ -27,6 +27,10 @@ public struct SheetFile: AssetFile, Equatable, Sendable {
     public var solid: [Int]?
     /// Fonts only: the characters the frames show, in order.
     public var characters: String?
+    /// Tilesets only: what each tile can say, like water or damage, with their types and defaults, as objects' properties.
+    public var properties: [ObjectFile.Property]?
+    /// Tilesets only: the tiles' own values for those, by tile number, where they aren't the default.
+    public var tiles: [Int: [String: String]]?
 
     public struct Animation: Codable, Equatable, Sendable {
         public var frames: [Int]
@@ -38,13 +42,14 @@ public struct SheetFile: AssetFile, Equatable, Sendable {
         }
     }
 
-    public init(frameWidth: Int, frameHeight: Int, animations: [String: Animation]? = nil, solid: [Int]? = nil, characters: String? = nil) {
-        self.frameWidth = frameWidth
-        self.frameHeight = frameHeight
-        self.animations = animations
-        self.solid = solid
-        self.characters = characters
+    public init(frameWidth: Int, frameHeight: Int, animations: [String: Animation]? = nil, solid: [Int]? = nil, characters: String? = nil,
+                properties: [ObjectFile.Property]? = nil, tiles: [Int: [String: String]]? = nil) {
+        (self.frameWidth, self.frameHeight, self.animations, self.solid, self.characters) = (frameWidth, frameHeight, animations, solid, characters)
+        (self.properties, self.tiles) = (properties, tiles)
     }
+
+    /// A tile's properties: its own, over the tileset's defaults.
+    public func properties(of tile: Int) -> [String: String] { (properties ?? []).values(over: tiles?[tile]) }
 }
 
 /// A level from the tilemap editor, stored in `Assets/<name>.tilemap`.
@@ -115,6 +120,8 @@ public struct ObjectFile: AssetFile, Equatable, Sendable {
     public var `class`: String?
     /// Settings for the game, in order, each with its type and default. A map's objects can change them.
     public var properties: [Property]?
+    /// More sprites it's drawn with, each at an offset: a tree's crown, a house's roof.
+    public var parts: [Part]?
 
     public struct Hitbox: Codable, Equatable, Sendable {
         public var x, y, width, height: Int
@@ -128,19 +135,47 @@ public struct ObjectFile: AssetFile, Equatable, Sendable {
         public var type: PropertyType?
         /// The default, as text like all values; nil is none.
         public var value: String?
+        /// A list of values of its type, one per line; nil is false.
+        public var list: Bool?
 
-        public init(name: String, type: PropertyType? = nil, value: String? = nil) { (self.name, self.type, self.value) = (name, type, value) }
+        public init(name: String, type: PropertyType? = nil, value: String? = nil, list: Bool? = nil) {
+            (self.name, self.type, self.value, self.list) = (name, type, value, list)
+        }
     }
 
-    /// What a property holds. Values are text in the files either way: "40", "true", a map's or an object's name.
+    /// What a property holds. Values are text in the files either way: "40", "true", "#FF004D", "12,34" (a point in
+    /// pixels), or a sprite's, sound's, map's or object's name.
     public enum PropertyType: String, Codable, CaseIterable, Sendable {
-        case text, number, toggle, map, object
+        case text, number, toggle, color, point, sprite, sound, map, object
+    }
+
+    /// A sprite drawn with the object besides its own, from its top-left corner.
+    public struct Part: Codable, Equatable, Sendable {
+        public var sprite: String
+        /// The animation it plays; nil shows its first frame.
+        public var animation: String?
+        public var x, y: Int
+        /// Draws over everything else, like a roof the player walks under; nil is false, drawn with the object by depth.
+        public var above: Bool?
+
+        public init(sprite: String, animation: String? = nil, x: Int = 0, y: Int = 0, above: Bool? = nil) {
+            (self.sprite, self.animation, self.x, self.y, self.above) = (sprite, animation, x, y, above)
+        }
     }
 
     public init(sprite: String? = nil, animation: String? = nil, width: Int? = nil, height: Int? = nil, hitbox: Hitbox? = nil, solid: Bool? = nil,
-                class: String? = nil, properties: [Property]? = nil) {
+                class: String? = nil, properties: [Property]? = nil, parts: [Part]? = nil) {
         (self.sprite, self.animation, self.width, self.height, self.hitbox) = (sprite, animation, width, height, hitbox)
-        (self.solid, self.class, self.properties) = (solid, `class`, properties)
+        (self.solid, self.class, self.properties, self.parts) = (solid, `class`, properties, parts)
+    }
+}
+
+public extension [ObjectFile.Property] {
+    /// `own` values, over these properties' defaults.
+    func values(over own: [String: String]?) -> [String: String] {
+        reduce(into: own ?? [:]) { all, property in
+            if all[property.name] == nil, let value = property.value { all[property.name] = value }
+        }
     }
 }
 
@@ -154,9 +189,5 @@ public extension TilemapFile.Object {
     }
 
     /// Its properties: its own, over its definition's defaults.
-    func properties(_ definition: ObjectFile?) -> [String: String] {
-        (definition?.properties ?? []).reduce(into: properties ?? [:]) { all, property in
-            if all[property.name] == nil, let value = property.value { all[property.name] = value }
-        }
-    }
+    func properties(_ definition: ObjectFile?) -> [String: String] { (definition?.properties ?? []).values(over: properties) }
 }

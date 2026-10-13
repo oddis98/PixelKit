@@ -156,3 +156,66 @@ extension ObjectName { static let door = ObjectName("door") }
     #expect(text.count == 12 && text == drawn { screen.text("A A", x: 0, y: 0, width: 2, font: "tiny") })
     #expect(screen.textSize("A A", font: .tiny) == screen.textSize("A A", font: "tiny") && screen.wrap("A A", width: 2, font: .tiny) == "A\nA")
 }
+
+@Test func propertiesReadAsWhatTheyAreAndAnEmptyOneOverADefaultIsNone() {
+    let definition = ObjectFile(properties: [.init(name: "to", type: .map, value: "house"), .init(name: "at", type: .object, value: "porch")])
+    let door = Tilemap.Object(.init(name: "door", x: 0, y: 0, properties: [
+        "at": "", "tint": "#FF004D", "speed": "40", "open": "true", "target": "12, 34", "icon": "key", "step": "creak",
+        "words": "Hello!\nBye", "path": "0,0\n16,8\nnowhere", "bad": "#zz",
+    ]), definition: definition, tileSize: 16) { _ in nil }
+    #expect(door.map("to") == MapName("house") && door.object("at") == nil) // its own None over the default, porch
+    #expect(door.color("tint") == 0xFF004D && door.color("speed") == nil && door.color("bad") == nil)
+    #expect(door.double("speed") == 40 && door.bool("open") && door.point("target") == [12, 34] && door.point("speed") == nil)
+    #expect(door.sprite("icon") == ImageName("key") && door.sound("step") == SoundName("creak") && door.map("nothing") == nil)
+    #expect(door.list("words", of: String.self) == ["Hello!", "Bye"] && door.list("path", of: Vector.self) == [[0, 0], [16, 8]])
+    #expect(door.list("tint", of: UInt32.self) == [0xFF004D] && door.list("speed", of: Int.self) == [40] && door.list("at", of: ObjectName.self).isEmpty)
+}
+
+@MainActor @Test func tilesHaveTheirTilesetsPropertiesOverItsDefaults() throws {
+    let assets = FileManager.default.temporaryDirectory.appending(path: "tiles-\(UUID())/Assets")
+    try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
+    FileManager.default.changeCurrentDirectoryPath(assets.deletingLastPathComponent().path) // games load Assets/ relative to here
+    try SheetFile(frameWidth: 8, frameHeight: 8, properties: [.init(name: "water", type: .toggle), .init(name: "damage", type: .number, value: "0")],
+                  tiles: [1: ["water": "true"], 2: ["damage": "5"]]).write(to: assets.appending(path: "tiles.json"))
+    try TilemapFile(tileset: "tiles", width: 3, height: 1, layers: [.init(name: "Ground", tiles: [0, 1, -1]), .init(name: "Top", tiles: [-1, 2, -1])])
+        .write(to: assets.appending(path: "level.tilemap"))
+    let map = Tilemap("level")
+    #expect(map.properties(at: [3, 3], layer: 0).properties == ["damage": "0"]) // tile 0 has the defaults
+    #expect(map.properties(at: [8, 0], layer: 0).bool("water") && map.properties(at: [8, 0], layer: 0).double("damage") == 0)
+    #expect(map.properties(at: [15, 7], layer: 1).double("damage") == 5 && !map.properties(at: [15, 7], layer: 1).bool("water"))
+    #expect(map.properties(at: [16, 0], layer: 0).properties.isEmpty && map.properties(at: [-1, 0], layer: 0).properties.isEmpty) // empty, outside
+}
+
+@MainActor @Test func anObjectsPartsDrawWithItByDepthAndThoseAboveOverEverything() throws {
+    let definition = ObjectFile(sprite: "dot", hitbox: .init(x: 0, y: 2, width: 3, height: 1),
+                                parts: [.init(sprite: "dot", animation: "sway", x: 0, y: -3), .init(sprite: "dot", x: 1, y: -6, above: true)])
+    let tree = Entity(Tilemap.Object(.init(name: "tree", x: 10, y: 10), definition: definition, tileSize: 16) { _ in Size(3, 3) })
+    #expect(tree.parts.map(\.offset) == [[0, -3], [1, -6]] && tree.parts.map(\.above) == [false, true] && tree.parts[0].sprite.animation == "sway")
+    let player = Entity()
+    (player.sprite, player.hitbox) = (Sprite("dot"), Rect(x: 0, y: 0, width: 3, height: 3))
+    let scene = Scene()
+    scene.ySort = true
+    scene.add(player, at: [20, 11]) // its feet at 14, in front of the tree's, at 13
+    scene.add(tree, at: [10, 10])
+    scene.update(0.5)
+    #expect(tree.parts.allSatisfy { $0.sprite.time == 0.5 })
+
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let screen = Screen(size: Size(32, 32), device: device, format: .bgra8Unorm)
+    (screen.textures["dot"], screen.sheets["dot"]) = (device.makeTexture(descriptor: .texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 3, height: 3, mipmapped: false)), .some(nil))
+    scene.draw(screen)
+    let corners = stride(from: 0, to: screen.vertices.count, by: 6).map { [screen.vertices[$0][0], screen.vertices[$0][1]] }
+    #expect(corners == [[10, 10], [10, 7], [20, 11], [11, 4]]) // the tree and its part by depth, the player in front, the crown over all
+}
+
+@Test func filesFromBeforeTheNewFieldsLoad() throws {
+    let sheet = try JSONDecoder().decode(SheetFile.self, from: Data(#"{"frameWidth": 8, "frameHeight": 8, "solid": [1]}"#.utf8))
+    #expect(sheet.properties == nil && sheet.tiles == nil && sheet.properties(of: 1).isEmpty)
+    let object = try JSONDecoder().decode(ObjectFile.self, from: Data(#"{"sprite": "tree", "properties": [{"name": "to", "type": "map"}]}"#.utf8))
+    #expect(object.parts == nil && object.properties?.first?.list == nil && object.properties?.first?.type == .map)
+    let written = ObjectFile(properties: [.init(name: "path", type: .point, value: "1,2\n3,4", list: true)], parts: [.init(sprite: "crown", y: -16, above: true)])
+    #expect(try JSONDecoder().decode(ObjectFile.self, from: JSONEncoder().encode(written)) == written)
+    let tiles = SheetFile(frameWidth: 8, frameHeight: 8, properties: [.init(name: "water", type: .toggle)], tiles: [3: ["water": "true"]])
+    #expect(try String(decoding: JSONEncoder().encode(tiles), as: UTF8.self).contains(#""tiles":{"3":{"water":"true"}}"#))
+    #expect(try JSONDecoder().decode(SheetFile.self, from: JSONEncoder().encode(tiles)) == tiles)
+}

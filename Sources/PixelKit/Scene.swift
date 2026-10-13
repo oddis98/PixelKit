@@ -58,11 +58,11 @@ import PixelKitProtocol
     }
 
     /// Adds the tilemap's objects that are things in the world and returns them: each one whose definition names a
-    /// class, made as that class (a `Placeable`), or that has a sprite, as an `Entity`. Zones and markers stay in
+    /// class, made as that class (a `Placeable`), or that has sprites, as an `Entity`. Zones and markers stay in
     /// `tilemap.objects` for the game to read, like a door to step on or where the player starts.
     @discardableResult public func addObjects() -> [Entity] {
         (tilemap?.objects ?? []).compactMap { object in
-            guard object.class != nil || object.sprite != nil else { return nil }
+            guard object.class != nil || object.sprite != nil || !object.parts.isEmpty else { return nil }
             let entity = Self.make(object)
             add(entity, at: object.position)
             return entity
@@ -91,17 +91,21 @@ import PixelKitProtocol
         for entity in entities {
             entity.update(dt)
             entity.sprite?.time += dt
+            for i in entity.parts.indices { entity.parts[i].sprite.time += dt }
         }
         tilemap?.time += dt
     }
 
-    /// Call super to draw the tilemap and entities, then draw anything on top (like a HUD) in screen pixels.
+    /// Call super to draw the tilemap and entities, then draw anything on top (like a HUD) in screen pixels. The
+    /// map's layers above and the entities' parts above draw over the entities, in that order.
     open func draw(_ screen: Screen) {
         if let follow { camera = Self.camera(following: follow.box(at: follow.position), view: screen.size, map: tilemap?.size) }
         screen.offset = camera.rounded(.down)
         if let tilemap { screen.draw(tilemap, layers: tilemap.layers.indices.filter { !tilemap.above.contains($0) }) }
-        for entity in drawOrder { entity.draw(screen) }
+        let order = drawOrder
+        for entity in order { entity.draw(screen) }
         if let tilemap, !tilemap.above.isEmpty { screen.draw(tilemap, layers: tilemap.above.sorted()) }
+        for entity in order { entity.draw(screen, above: true) }
         screen.offset = .zero
     }
 
@@ -143,6 +147,9 @@ struct Fade {
     public var hitbox = Rect(x: 0, y: 0, width: 16, height: 16)
     /// What it looks like, drawn at `position`; nil draws nothing.
     public var sprite: Sprite?
+    /// More sprites it's drawn with, each at an offset: a tree's crown, a house's roof, a hat. Those `above` draw over
+    /// every entity, as a roof the player walks under does; the rest draw with it, after `sprite`.
+    public var parts: [Part] = []
     /// Blocks other entities' `move(_:)`, as solid tiles do: villagers, chests, tree trunks.
     public var solid = false
     /// The scene it's in, from `Scene.add(_:at:)`.
@@ -155,20 +162,41 @@ struct Fade {
     public init() {}
 
     /// Makes an entity from an object placed in a map, as `Scene.addObjects()` does: `init()` runs, then it takes the
-    /// object's place, hitbox and solidity, and its sprite if it has one, and keeps the object in `object`. A subclass
+    /// object's place, hitbox and solidity, and its sprites if it has any, and keeps the object in `object`. A subclass
     /// that overrides `init()`, or declares no initializers, inherits this.
     public convenience init(_ object: Tilemap.Object) {
         self.init()
         (self.object, position, hitbox, solid) = (object, object.position, object.hitbox, object.solid)
         if let sprite = object.sprite { self.sprite = sprite }
+        if !object.parts.isEmpty { parts = object.parts }
+    }
+
+    /// A sprite an entity is drawn with besides its `sprite`.
+    public struct Part: Sendable {
+        public var sprite: Sprite
+        /// From the entity's `position`, in pixels.
+        public var offset: Vector
+        /// Draws over every entity, and over the map's layers above them.
+        public var above: Bool
+
+        public init(_ sprite: Sprite, offset: Vector = .zero, above: Bool = false) { (self.sprite, self.offset, self.above) = (sprite, offset, above) }
     }
 
     /// Runs 60 times a second; `dt` is the time since the last update, in seconds. Override it to move and react.
     open func update(_ dt: Double) {}
 
-    /// Draws the sprite. Override it to draw more, in world pixels, and call super to keep the sprite.
+    /// Draws the sprite and the parts that aren't above. Override it to draw more, in world pixels, and call super to
+    /// keep them.
     open func draw(_ screen: Screen) {
         if let sprite { screen.draw(sprite, x: position.x, y: position.y) }
+        draw(screen, above: false)
+    }
+
+    /// Draws the parts that are, or aren't, above: the scene draws those above after the rest.
+    func draw(_ screen: Screen, above: Bool) {
+        for part in parts where part.above == above {
+            screen.draw(part.sprite, x: position.x + part.offset.x, y: position.y + part.offset.y)
+        }
     }
 
     /// Where it draws when the scene's `ySort` is on, in world pixels: the bottom of its hitbox, its feet, so the
@@ -286,6 +314,8 @@ public struct Tilemap: Sendable {
     public var above: Set<Int> = []
     /// Tile numbers that block movement, in any layer.
     public var solid: Set<Int>
+    /// What the tileset says of its tiles, for `properties(at:layer:)`.
+    var sheet: SheetFile?
     /// Things placed in the level with the map editor's Objects tool, like coins or where the player starts.
     public var objects: [Object] = []
     var name: String? // the .tilemap it came from
@@ -296,19 +326,21 @@ public struct Tilemap: Sendable {
     var time = 0.0 // for animated tiles, advanced by the scene's updates
 
     /// Something placed in the level with the map editor's Objects tool. What it is comes from its definition,
-    /// `Assets/Objects/<name>.object`, if it has one: its sprite, its hitbox, whether it's solid, its class, and its
+    /// `Assets/Objects/<name>.object`, if it has one: its sprites, its hitbox, whether it's solid, its class, and its
     /// properties' defaults.
-    public struct Object: Sendable {
+    public struct Object: Properties, Sendable {
         /// What it is, like "coin" or "player", and its definition's file name; `objects(named:)` finds them by it.
         public var name: String
         /// Top-left corner, in pixels.
         public var position: Vector
-        /// Settings for the game, like "speed": "40": its own, over its definition's defaults. `double(_:)` and
-        /// `bool(_:)` read them as numbers and toggles.
+        /// Settings for the game, like "speed": "40": its own, over its definition's defaults. `double(_:)`, `map(_:)`
+        /// and the others read them as what they are.
         public var properties: [String: String]
         /// What it's drawn with, playing its definition's animation; nil for a zone, a marker, or an object without a
         /// definition.
         public var sprite: Sprite?
+        /// The other sprites its definition draws it with.
+        public var parts: [Entity.Part]
         /// The part that collides, from its top-left corner: its definition's, or all of it.
         public var hitbox: Rect
         /// Blocks solid movers, as `Entity.solid` does.
@@ -322,20 +354,16 @@ public struct Tilemap: Sendable {
         /// like doors: `player.overlaps(door.box)`.
         public var box: Rect { Rect(x: Int(position.x), y: Int(position.y), width: size.width, height: size.height) }
 
-        /// A property as a number, like "speed": "40"; nil if it has none or it isn't one.
-        public func double(_ name: String) -> Double? { properties[name].flatMap(Double.init) }
-
-        /// A property as a toggle, "true" or "false"; false if it has none.
-        public func bool(_ name: String) -> Bool { properties[name] == "true" }
-
         init(_ placed: TilemapFile.Object, definition: ObjectFile?, tileSize: Int, frame: (String) -> Size?) {
             let size = placed.size(definition, tileSize: tileSize) { frame($0).map { ($0.width, $0.height) } }
             (name, position, properties) = (placed.name, [Double(placed.x), Double(placed.y)], placed.properties(definition))
-            sprite = definition?.sprite.map { name in
-                var sprite = Sprite(name)
-                if let animation = definition?.animation { sprite.play(animation) }
+            func playing(_ image: String, _ animation: String?) -> Sprite {
+                var sprite = Sprite(image)
+                if let animation { sprite.play(animation) }
                 return sprite
             }
+            sprite = definition?.sprite.map { playing($0, definition?.animation) }
+            parts = (definition?.parts ?? []).map { .init(playing($0.sprite, $0.animation), offset: [Double($0.x), Double($0.y)], above: $0.above == true) }
             hitbox = definition?.hitbox.map { Rect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }
                 ?? Rect(x: 0, y: 0, width: size.width, height: size.height)
             (solid, `class`, self.size) = (definition?.solid ?? false, definition?.class, Size(size.width, size.height))
@@ -361,6 +389,7 @@ public struct Tilemap: Sendable {
         layers = map.layers.map { $0.tiles.map { $0 < 0 ? nil : $0 } }
         above = Set(map.layers.indices.filter { map.layers[$0].above == true })
         solid = Set(sheet.solid ?? [])
+        self.sheet = sheet
         let names = Set((map.objects ?? []).map(\.name)).sorted()
         var definitions: [String: ObjectFile] = [:]
         for name in names {
@@ -418,6 +447,18 @@ public struct Tilemap: Sendable {
         return layers[layer][i]
     }
 
+    /// The properties of the tile at world pixel `point` in `layer`, which the map editor sets for each of the
+    /// tileset's tiles: water, ice, damage, a footstep's sound. `bool(_:)`, `double(_:)` and the others read them, as an
+    /// object's: `tilemap.properties(at: feet, layer: 0).bool("water")`. An empty cell, or outside the map, has none.
+    public func properties(at point: Vector, layer: Int) -> TileProperties {
+        TileProperties(properties: tile(at: point, layer: layer).flatMap { sheet?.properties(of: $0) } ?? [:])
+    }
+
+    /// A tile's properties, from `properties(at:layer:)`.
+    public struct TileProperties: Properties, Sendable {
+        public let properties: [String: String]
+    }
+
     /// Puts `tile` at world pixel `point` in `layer`, or empties the cell with nil: cut a bush, till soil, build a
     /// wall. Outside the map it does nothing. The change stays when the map reloads as it's edited in the editor.
     public mutating func setTile(_ tile: Int?, at point: Vector, layer: Int) {
@@ -472,4 +513,100 @@ public struct Tilemap: Sendable {
 
     /// Which cell a pixel is in, rounding toward -∞ so pixels left of or above the map get negative cells.
     func cell(_ pixel: Int) -> Int { pixel >= 0 ? pixel / tileSize : (pixel + 1) / tileSize - 1 }
+}
+
+/// What has properties from the editor, typed there and kept as text: a map's objects, and its tiles
+/// (`Tilemap.properties(at:layer:)`). These read them as what they are, so `door.map("to")` is a `MapName` that
+/// `Tilemap(_:)` takes. Each is nil (false for `bool`, empty for `list`) when there's none, when it isn't of its type,
+/// or when it's empty, as a popup's None over a default is.
+public protocol Properties {
+    var properties: [String: String] { get }
+}
+
+public extension Properties {
+    /// A number, like "speed": "40".
+    func double(_ name: String) -> Double? { value(name) }
+
+    /// A toggle, "true" or "false"; false if there's none.
+    func bool(_ name: String) -> Bool { properties[name] == "true" }
+
+    /// A color, "#FF004D", as 0xRRGGBB, like `Sprite.color` takes.
+    func color(_ name: String) -> UInt32? { properties[name]?.hasPrefix("#") == true ? value(name) : nil }
+
+    /// A point in world pixels, "12,34", like where a guard walks to.
+    func point(_ name: String) -> Vector? { value(name) }
+
+    /// One of the game's maps, by name: `Tilemap(door.map("to")!)`.
+    func map(_ name: String) -> MapName? { value(name) }
+
+    /// One of the game's objects, by name: `tilemap.objects(named: door.object("at") ?? .start)`.
+    func object(_ name: String) -> ObjectName? { value(name) }
+
+    /// One of the game's images, by name: `Sprite(chest.sprite("open")!)`.
+    func sprite(_ name: String) -> ImageName? { value(name) }
+
+    /// One of the game's sounds, by name: `Sound.play(step.sound("footstep")!)`.
+    func sound(_ name: String) -> SoundName? { value(name) }
+
+    /// A list, its values read as `Value`s, leaving out any that aren't one: `villager.list("words", of: String.self)`,
+    /// `guard.list("path", of: Vector.self)`.
+    func list<Value: PropertyValue>(_ name: String, of type: Value.Type = Value.self) -> [Value] {
+        (properties[name] ?? "").split(separator: "\n").compactMap { Value(property: String($0)) }
+    }
+
+    private func value<Value: PropertyValue>(_ name: String) -> Value? { properties[name].flatMap(Value.init(property:)) }
+}
+
+/// What a property's text can be read as, for `Properties.list(_:of:)`: text, numbers, toggles, colors, points and the
+/// game's asset names.
+public protocol PropertyValue {
+    init?(property text: String)
+}
+
+extension String: PropertyValue {
+    public init?(property text: String) { self = text }
+}
+
+extension Double: PropertyValue {
+    public init?(property text: String) { self.init(text) }
+}
+
+extension Int: PropertyValue {
+    public init?(property text: String) { self.init(text) }
+}
+
+extension Bool: PropertyValue {
+    public init?(property text: String) { self.init(text) }
+}
+
+extension UInt32: PropertyValue {
+    /// A color, "#FF004D", or a whole number.
+    public init?(property text: String) {
+        if text.hasPrefix("#") { self.init(text.dropFirst(), radix: 16) } else { self.init(text) }
+    }
+}
+
+extension SIMD2: PropertyValue where Scalar == Double {
+    /// A point, "12,34".
+    public init?(property text: String) {
+        let numbers = text.split(separator: ",").compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+        guard numbers.count == 2 else { return nil }
+        self.init(numbers[0], numbers[1])
+    }
+}
+
+extension ImageName: PropertyValue {
+    public init?(property text: String) { if text.isEmpty { return nil } else { self.init(text) } }
+}
+
+extension MapName: PropertyValue {
+    public init?(property text: String) { if text.isEmpty { return nil } else { self.init(text) } }
+}
+
+extension ObjectName: PropertyValue {
+    public init?(property text: String) { if text.isEmpty { return nil } else { self.init(text) } }
+}
+
+extension SoundName: PropertyValue {
+    public init?(property text: String) { if text.isEmpty { return nil } else { self.init(text) } }
 }

@@ -84,8 +84,8 @@ final class Place: Scene {
             progress.cut[map.name, default: []].append(front)
             Sound.play(.cut)
         }
-        if let door = doors.first(where: { player.overlaps($0.box) }), let to = door.properties["to"] {
-            let next = Place(MapName(to), progress, at: door.properties["at"].map(ObjectName.init) ?? .start)
+        if let door = doors.first(where: { player.overlaps($0.box) }), let to = door.map("to") {
+            let next = Place(to, progress, at: door.object("at") ?? .start)
             if next.map == .village { // coming out of the house saves the game
                 progress.place = next.player.position
                 Save.write(progress, to: "progress")
@@ -106,12 +106,9 @@ final class Place: Scene {
     }
 }
 
-/// Stands in the way, and talks when you press A in front of them. Their sprite, hitbox and solidity are in
-/// Assets/Objects/villager.object.
+/// Stands in the way, and talks when you press A in front of them: a page for each of their words, a list in
+/// Assets/Objects/villager.object that each villager placed in a map can change. Their sprite, hitbox and solidity are
+/// there too.
 final class Villager: Entity, Placeable {
-    let words = [
-        "Hello! Welcome to the village. The house up the path is yours, and the trees around it are older than any of us.",
-        "The hedge by the garden has grown wild again. Stand in front of a bush and press X (C on a keyboard) to cut it.",
-        "Your things are saved whenever you come out of your house.",
-    ]
+    lazy var words = object?.list("words", of: String.self) ?? []
 }
