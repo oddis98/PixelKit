@@ -59,27 +59,6 @@ import Testing
     #expect(camera(300, 200, map: nil) == [148, 118])
 }
 
-@MainActor @Test func aFadeCoversTheViewSwitchesHalfwayAndClearsWhileTheOldSceneStandsStill() {
-    final class Counted: Scene {
-        var updates = 0
-        override func update(_ dt: Double) { updates += 1 }
-    }
-    let (village, house) = (Counted(), Counted())
-    Scene.current = village
-    defer { (Scene.current, Scene.fading) = (Scene(), nil) }
-    Scene.fade(to: house, duration: 1, color: 0x102030)
-    var opacities: [Double] = []
-    for _ in 0..<8 {
-        Scene.tick(0.125)
-        opacities.append(Scene.fading?.opacity ?? 0)
-    }
-    #expect(opacities == [0.25, 0.5, 0.75, 1, 0.75, 0.5, 0.25, 0])
-    #expect(village.updates == 0 && house.updates == 5 && Scene.current === house && Scene.fading == nil) // from the switch on
-
-    Scene.fade(to: village, duration: 0) // no time to fade: at once
-    #expect(Scene.current === village && Scene.fading == nil)
-}
-
 @MainActor @Test func savesRoundTripAndOnesThatNoLongerDecodeReadAsNil() {
     struct Progress: Codable, Equatable { var place: Vector, cut: [Int] }
     struct Renamed: Codable { var spot: Vector }

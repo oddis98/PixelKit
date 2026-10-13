@@ -21,9 +21,9 @@ enum Tile {
     static let bush = 4, stump = 5
 }
 
-/// A map to walk around in: the village, or inside the house. Its objects, placed in the map editor and defined in
-/// Assets/Objects, say what's where: trees, the house's front and the villager, doors with where they lead (`to`) and
-/// where you come out (`at`), and where the game starts.
+/// A map to walk around in: the village, or inside the house, which is dark but for its fire. Its objects, placed in
+/// the map editor and defined in Assets/Objects, say what's where: trees, the house's front, its fireplace and the
+/// villager, doors with where they lead (`to`) and where you come out (`at`), and where the game starts.
 final class Place: Scene {
     let map: MapName
     let progress: Progress
@@ -38,12 +38,13 @@ final class Place: Scene {
         (self.map, self.progress) = (map, progress)
         super.init()
         ySort = true // things draw by where their feet are
-        follow = player
+        follow = player // the camera keeps them in the middle, and a door's iris closes on them
         background = 0x000000
+        if map == .house { (darkness, darknessColor) = (0.85, 0x1D2B53) } // a night's blue where the fire doesn't reach
         var tiles = Tilemap(map)
         for point in progress.cut[map.name] ?? [] { tiles.setTile(Tile.stump, at: point, layer: 0) }
         tilemap = tiles
-        addObjects() // the trees and the house, solid at their base, and the villager
+        addObjects() // the trees and the house, solid at their base, the villager and the fireplace
         doors = tiles.objects.filter { $0.name == .door }
         player.sprite = Sprite(.player)
         player.hitbox = Rect(x: 3, y: 10, width: 10, height: 6) // the feet, so the head can pass in front of things
@@ -90,7 +91,7 @@ final class Place: Scene {
                 progress.place = next.player.position
                 Save.write(progress, to: "progress")
             }
-            Scene.fade(to: next)
+            Scene.transition(to: next, duration: 0.8, style: .iris)
         }
     }
 
@@ -111,4 +112,12 @@ final class Place: Scene {
 /// there too.
 final class Villager: Entity, Placeable {
     lazy var words = object?.list("words", of: String.self) ?? []
+}
+
+/// The house's fire, which lights it in the dark, flickering as flames do.
+final class Fireplace: Entity, Placeable {
+    override init() {
+        super.init()
+        light = Light(radius: 80, color: 0xFFA300, flicker: 0.1)
+    }
 }

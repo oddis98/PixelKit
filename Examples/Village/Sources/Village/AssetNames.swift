@@ -6,6 +6,7 @@ import PixelKit
 
 extension ImageName {
     static let appIcon = ImageName("AppIcon")
+    static let fireplace = ImageName("fireplace")
     static let house = ImageName("house")
     static let player = ImageName("player")
     static let textbox = ImageName("textbox")
@@ -22,6 +23,7 @@ extension MapName {
 extension ObjectName {
     static let door = ObjectName("door")
     static let entrance = ObjectName("entrance")
+    static let fireplace = ObjectName("fireplace")
     static let house = ObjectName("house")
     static let porch = ObjectName("porch")
     static let start = ObjectName("start")

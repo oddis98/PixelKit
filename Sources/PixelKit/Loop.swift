@@ -44,19 +44,18 @@ import PixelKitProtocol
         }
 
         guard let commands = queue.makeCommandBuffer() else { return nil }
+        if Scene.changing?.style == .dissolve, Scene.changing?.snapped == false { // the canvas still has the last frame
+            screen.snap(commands)
+            Scene.changing?.snapped = true
+        }
         let scene = Scene.current
-        let rgb = scene.background
         let canvas = MTLRenderPassDescriptor()
         canvas.colorAttachments[0].texture = screen.canvas
         canvas.colorAttachments[0].loadAction = .clear
-        canvas.colorAttachments[0].clearColor = MTLClearColor(
-            red: Double(rgb >> 16 & 0xFF) / 255, green: Double(rgb >> 8 & 0xFF) / 255, blue: Double(rgb & 0xFF) / 255, alpha: 1)
+        canvas.colorAttachments[0].clearColor = clearColor(scene.background)
         screen.begin(commands, canvas)
         scene.draw(screen)
-        if let fade = Scene.fading {
-            screen.offset = .zero
-            screen.fill(Rect(x: 0, y: 0, width: screen.size.width, height: screen.size.height), color: fade.color, opacity: fade.opacity)
-        }
+        Scene.changing?.draw(screen, over: scene)
         screen.end()
         return commands
     }

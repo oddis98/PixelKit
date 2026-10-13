@@ -8,8 +8,15 @@ import Synchronization
     /// The canvas's size in pixels, the game's `resolution`: for laying out a HUD.
     public let size: Size
     let device: MTLDevice
-    let pipeline: MTLRenderPipelineState
+    let pipeline: MTLRenderPipelineState // sprites, blended by their alpha
+    let glow: MTLRenderPipelineState // lights, added up in the light map
+    let multiply: MTLRenderPipelineState // the light map over the world
     let canvas: MTLTexture
+    let canvasDescriptor: MTLTextureDescriptor
+    /// What lights add up in, the canvas's size, made the first time a scene is dark.
+    lazy var lightMap = device.makeTexture(descriptor: canvasDescriptor)!
+    /// The last frame before a dissolve, which it draws over the next scene.
+    lazy var snapshot = device.makeTexture(descriptor: canvasDescriptor)!
     let loader: MTKTextureLoader
     var textures: [String: MTLTexture] = [:]
     var sheets: [String: SheetFile?] = [:] // nil: the image has no .json, so it's a single frame
@@ -17,7 +24,11 @@ import Synchronization
     var modified: [String: Date?] = [:] // each loaded file's modification date, to spot edits
     var warned: Set<String> = []
     var encoder: MTLRenderCommandEncoder!
-    var vertices: [SIMD8<Float>] = [] // queued quads, all using `batchTexture`: x, y, u, v, then the tint r, g, b, a
+    var commands: MTLCommandBuffer!
+    var pass: MTLRenderPassDescriptor! // the canvas's, which a dark scene's light map interrupts
+    // Queued quads, all using `batchTexture`, three for each corner: x, y, u, v; the tint r, g, b, a; and the flash and
+    // how much of a dissolve's pattern to keep.
+    var vertices: [SIMD4<Float>] = []
     var batchTexture: MTLTexture?
     /// The built-in font's glyphs, made on first use.
     lazy var builtInFont = Font.builtInTexture(device)
@@ -36,22 +47,26 @@ import Synchronization
         loader = MTKTextureLoader(device: device)
 
         let library = try! device.makeLibrary(source: shaders, options: nil)
-        let pipeline = MTLRenderPipelineDescriptor()
-        pipeline.vertexFunction = library.makeFunction(name: "spriteVertex")
-        pipeline.fragmentFunction = library.makeFunction(name: "spriteFragment")
-        let color = pipeline.colorAttachments[0]!
-        color.pixelFormat = format
-        color.isBlendingEnabled = true
-        color.sourceRGBBlendFactor = .sourceAlpha
-        color.destinationRGBBlendFactor = .oneMinusSourceAlpha
-        color.destinationAlphaBlendFactor = .oneMinusSourceAlpha
-        self.pipeline = try! device.makeRenderPipelineState(descriptor: pipeline)
+        func state(_ fragment: String, rgb: (MTLBlendFactor, MTLBlendFactor), alpha: (MTLBlendFactor, MTLBlendFactor)) -> MTLRenderPipelineState {
+            let pipeline = MTLRenderPipelineDescriptor()
+            pipeline.vertexFunction = library.makeFunction(name: "spriteVertex")
+            pipeline.fragmentFunction = library.makeFunction(name: fragment)
+            let color = pipeline.colorAttachments[0]!
+            color.pixelFormat = format
+            color.isBlendingEnabled = true
+            (color.sourceRGBBlendFactor, color.destinationRGBBlendFactor) = rgb
+            (color.sourceAlphaBlendFactor, color.destinationAlphaBlendFactor) = alpha
+            return try! device.makeRenderPipelineState(descriptor: pipeline)
+        }
+        pipeline = state("spriteFragment", rgb: (.sourceAlpha, .oneMinusSourceAlpha), alpha: (.one, .oneMinusSourceAlpha))
+        glow = state("glowFragment", rgb: (.one, .one), alpha: (.one, .one))
+        multiply = state("spriteFragment", rgb: (.destinationColor, .zero), alpha: (.zero, .one))
 
         let texture = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: format, width: size.width, height: size.height, mipmapped: false)
         texture.usage = [.renderTarget, .shaderRead]
         texture.storageMode = .private
-        canvas = device.makeTexture(descriptor: texture)!
+        (canvasDescriptor, canvas) = (texture, device.makeTexture(descriptor: texture)!)
     }
 
     /// Draws all of `Assets/<image>.png` with its top-left corner at (x, y), snapped to whole pixels.
@@ -66,17 +81,16 @@ import Synchronization
     /// Draws the sprite's current frame with its top-left corner at (x, y), snapped to whole pixels.
     public func draw(_ sprite: Sprite, x: Double, y: Double) {
         let texture = texture(sprite.image)
-        let sheet = sheet(sprite.image)
-        let size = Size(sheet?.frameWidth ?? texture.width, sheet?.frameHeight ?? texture.height)
         var frame = 0
         if let name = sprite.animation {
-            if let shown = sheet?.animations?[name]?.frame(at: sprite.time) {
+            if let shown = sheet(sprite.image)?.animations?[name]?.frame(at: sprite.time) {
                 frame = shown
             } else if warned.insert("\(sprite.image) \(name)").inserted {
                 print("PixelKit: \(sprite.image).json has no animation \"\(name)\"")
             }
         }
-        quad(texture, x: x, y: y, source: region(frame, size, in: texture), flip: sprite.flipped, color: sprite.color, opacity: sprite.opacity)
+        quad(texture, x: x, y: y, source: region(frame, self.frame(sprite.image), in: texture), flip: sprite.flipped, color: sprite.color,
+             opacity: sprite.opacity, flash: sprite.flash)
     }
 
     /// Draws the tilemap's `layers` (all of them unless you say), first to last: only the tiles on the canvas, so
@@ -112,8 +126,7 @@ import Synchronization
 
     /// Draws an image named in a string as a box.
     @_disfavoredOverload public func panel(_ image: String, in box: Rect) {
-        let texture = texture(image)
-        let frame = sheet(image).map { Size($0.frameWidth, $0.frameHeight) } ?? Size(texture.width, texture.height)
+        let (texture, frame) = (texture(image), frame(image))
         // Each third's start and length, in the image and in the box. In a box smaller than two corners, they overlap.
         func thirds(_ image: Int, _ start: Int, _ length: Int) -> [(from: Int, length: Int, to: Int, size: Int)] {
             let corner = image / 3
@@ -126,6 +139,59 @@ import Synchronization
                      size: Size(column.size, row.size))
             }
         }
+    }
+
+    /// The size of an image's frames, as its `.json` cuts it up, or of the whole image.
+    func frame(_ image: String) -> Size {
+        sheet(image).map { Size($0.frameWidth, $0.frameHeight) } ?? Size(texture(image).width, texture(image).height)
+    }
+
+    /// The middle of an entity, in world pixels: of its sprite's frame, or of its hitbox without one. Its light shines
+    /// from there, and an iris closes on it.
+    func middle(of entity: Entity) -> Vector {
+        let corner = entity.position.rounded(.down)
+        guard let sprite = entity.sprite else {
+            let box = entity.hitbox
+            return corner + [Double(box.x), Double(box.y)] + [Double(box.width), Double(box.height)] / 2
+        }
+        let frame = frame(sprite.image)
+        return corner + [Double(frame.width), Double(frame.height)] / 2
+    }
+
+    /// Multiplies what's drawn so far by a light map: white mixed toward `color` by `darkness` everywhere, and each
+    /// light's color added around its middle (in world pixels, as the rest), brightest there and gone at its radius.
+    /// What's drawn after it isn't darkened.
+    func light(_ lights: [(middle: Vector, radius: Double, color: UInt32)], darkness: Double, color: UInt32) {
+        end()
+        let map = MTLRenderPassDescriptor()
+        map.colorAttachments[0].texture = lightMap
+        map.colorAttachments[0].loadAction = .clear
+        let dark = clearColor(color), lit = 1 - min(max(darkness, 0), 1)
+        map.colorAttachments[0].clearColor = MTLClearColor(red: dark.red + (1 - dark.red) * lit, green: dark.green + (1 - dark.green) * lit,
+                                                           blue: dark.blue + (1 - dark.blue) * lit, alpha: 1)
+        start(map, glow)
+        for light in lights {
+            let size = Int((light.radius * 2).rounded())
+            quad(white, x: light.middle.x - Double(size) / 2, y: light.middle.y - Double(size) / 2, source: Rect(x: 0, y: 0, width: 1, height: 1),
+                 size: Size(size, size), color: light.color)
+        }
+        end()
+        let canvas = pass.copy() as! MTLRenderPassDescriptor
+        canvas.colorAttachments[0].loadAction = .load
+        start(canvas, multiply)
+        let offset = self.offset
+        self.offset = .zero
+        quad(lightMap, x: 0, y: 0, source: Rect(x: 0, y: 0, width: size.width, height: size.height))
+        flush()
+        encoder.setRenderPipelineState(pipeline)
+        self.offset = offset
+    }
+
+    /// Copies the canvas as it is, still the last frame, for a dissolve to draw over the next scene.
+    func snap(_ commands: MTLCommandBuffer) {
+        guard let blit = commands.makeBlitCommandEncoder() else { return }
+        blit.copy(from: canvas, to: snapshot)
+        blit.endEncoding()
     }
 
     /// The `index`th `size` region of a sheet, counting left to right, then top to bottom.
@@ -177,10 +243,11 @@ import Synchronization
     }
 
     /// Queues a textured quad: `source`, from the texture, stretched over `size` (the same size unless you say), its
-    /// pixels multiplied by `color` (0xRRGGBB, where white leaves them as they are) and `opacity`.
+    /// pixels multiplied by `color` (0xRRGGBB, where white leaves them as they are) and `opacity`, then mixed toward
+    /// white by `flash`; of a dissolve's 4x4 pattern, only the share `keep` of its pixels draw.
     /// Consecutive quads with the same texture reach the GPU as one draw call.
     func quad(_ texture: MTLTexture, x: Double, y: Double, source s: Rect, size: Size? = nil, flip: Bool = false, color: UInt32 = 0xFFFFFF,
-              opacity: Double = 1) {
+              opacity: Double = 1, flash: Double = 0, keep: Double = 1) {
         if texture !== batchTexture {
             flush()
             batchTexture = texture
@@ -193,23 +260,30 @@ import Synchronization
         if flip { swap(&u0, &u1) }
         let corners: [SIMD4<Float>] = [[x0, y0, u0, v0], [x1, y0, u1, v0], [x0, y1, u0, v1], [x1, y0, u1, v0], [x1, y1, u1, v1], [x0, y1, u0, v1]]
         let tint = SIMD4<Float>(Float(color >> 16 & 0xFF) / 255, Float(color >> 8 & 0xFF) / 255, Float(color & 0xFF) / 255, Float(opacity))
-        vertices += corners.map { SIMD8(lowHalf: $0, highHalf: tint) }
+        let effects = SIMD4<Float>(Float(flash), Float(keep), 0, 0)
+        for corner in corners { vertices += [corner, tint, effects] }
     }
 
     func flush() {
         if let batchTexture, !vertices.isEmpty {
-            let buffer = device.makeBuffer(bytes: vertices, length: vertices.count * MemoryLayout<SIMD8<Float>>.stride)
+            let buffer = device.makeBuffer(bytes: vertices, length: vertices.count * MemoryLayout<SIMD4<Float>>.stride)
             encoder.setVertexBuffer(buffer, offset: 0, index: 0)
             encoder.setFragmentTexture(batchTexture, index: 0)
-            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertices.count)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertices.count / 3)
         }
         vertices.removeAll(keepingCapacity: true)
         batchTexture = nil
     }
 
     func begin(_ commands: MTLCommandBuffer, _ pass: MTLRenderPassDescriptor) {
+        (self.commands, self.pass) = (commands, pass)
+        start(pass, pipeline)
+    }
+
+    private func start(_ pass: MTLRenderPassDescriptor, _ state: MTLRenderPipelineState) {
+        pass.colorAttachments[0].storeAction = .store // kept for what's drawn after, the light map's multiply among them
         encoder = commands.makeRenderCommandEncoder(descriptor: pass)
-        encoder.setRenderPipelineState(pipeline)
+        encoder.setRenderPipelineState(state)
         let canvasSize = [SIMD2<Float>(Float(size.width), Float(size.height))]
         encoder.setVertexBytes(canvasSize, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
     }
@@ -219,6 +293,11 @@ import Synchronization
         encoder.endEncoding()
         encoder = nil
     }
+}
+
+/// A color, 0xRRGGBB, to clear a render pass to.
+func clearColor(_ rgb: UInt32) -> MTLClearColor {
+    MTLClearColor(red: Double(rgb >> 16 & 0xFF) / 255, green: Double(rgb >> 8 & 0xFF) / 255, blue: Double(rgb & 0xFF) / 255, alpha: 1)
 }
 
 /// The biggest scale of `canvas` that fits in `drawable`, so on a phone the game reaches the screen's edges: at the top
@@ -253,19 +332,33 @@ let shaders = """
 #include <metal_stdlib>
 using namespace metal;
 
-struct Vertex { float4 position [[position]]; float2 uv; float4 color [[flat]]; };
+struct Vertex { float4 position [[position]]; float2 uv; float4 color [[flat]]; float4 effects [[flat]]; };
 
-// As Screen.quad writes them: x, y in canvas pixels (y down) and u, v texture coords, then the color to multiply by.
-struct Corner { float4 xyuv; float4 color; };
+// As Screen.quad writes them: x, y in canvas pixels (y down) and u, v texture coords; the color to multiply by; then
+// how far to mix toward white (a flash) and how much of a dissolve's pattern to keep.
+struct Corner { float4 xyuv; float4 color; float4 effects; };
+
+// A 4x4 ordered dither: the order a dissolve's pixels go in.
+constant float bayer[16] = {0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5};
 
 vertex Vertex spriteVertex(uint i [[vertex_id]], constant Corner *v [[buffer(0)]], constant float2 &size [[buffer(1)]]) {
     float2 p = v[i].xyuv.xy / size * 2 - 1;
-    return { float4(p.x, -p.y, 0, 1), v[i].xyuv.zw, v[i].color };
+    return { float4(p.x, -p.y, 0, 1), v[i].xyuv.zw, v[i].color, v[i].effects };
 }
 
 fragment float4 spriteFragment(Vertex in [[stage_in]], texture2d<float> t [[texture(0)]]) {
+    uint2 cell = uint2(in.position.xy) % 4;
+    if (bayer[cell.y * 4 + cell.x] / 16 >= in.effects.y) discard_fragment();
     constexpr sampler nearest(filter::nearest);
-    return t.sample(nearest, in.uv) * in.color;
+    float4 c = t.sample(nearest, in.uv) * in.color;
+    return float4(mix(c.rgb, float3(1), saturate(in.effects.x)), c.a);
+}
+
+// A light, added to the light map: its color, brightest in the middle of its square and gone at the edge of its circle.
+fragment float4 glowFragment(Vertex in [[stage_in]]) {
+    float2 d = in.uv * 2 - 1;
+    float glow = saturate(1 - dot(d, d));
+    return float4(in.color.rgb * glow * glow, 1);
 }
 """
 

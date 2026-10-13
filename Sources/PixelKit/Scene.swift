@@ -21,27 +21,41 @@ import PixelKitProtocol
     public var ySort = false
     /// Clear color as 0xRRGGBB.
     public var background: UInt32 = 0x1D2B53
+    /// How dark the scene is, from 0, lit (the default), to 1, as dark as `darknessColor`, where on black nothing shows
+    /// but what the entities' `light`s light: for nights, caves and houses with the lights out. What's drawn after
+    /// `super.draw`, like a HUD, stays lit.
+    public var darkness = 0.0
+    /// The color of the dark, 0xRRGGBB, which multiplies what it darkens: black (the default), or a night's deep blue.
+    public var darknessColor: UInt32 = 0x000000
 
     public init() {}
 
     /// Switches to `next` through `color`: this scene stands still while the view fades to the color over the first
-    /// half of `duration` seconds, then `next` becomes `current` and updates while it fades back in. The fade covers
-    /// everything, a HUD too, and pauses with the game. `Scene.current = next` switches at once instead.
+    /// half of `duration` seconds, then `next` becomes `current` and updates while it fades back in. It's
+    /// `transition(to:duration:style:color:)`'s fade.
     public static func fade(to next: Scene, duration: Double = 0.5, color: UInt32 = 0x000000) {
-        guard duration > 0 else { return current = next }
-        fading = Fade(next: next, duration: duration, color: color)
+        transition(to: next, duration: duration, style: .fade, color: color)
     }
 
-    /// The fade under way, if any.
-    static var fading: Fade?
+    /// Switches to `next` over `duration` seconds in a `style`: a fade, a wipe or an iris goes through `color`, this
+    /// scene standing still until the color covers the view, halfway, then `next` becoming `current` and updating as
+    /// it's uncovered; a dissolve has `next` update from the start, under this scene's last frame as it breaks up. A
+    /// transition covers everything, a HUD too, and pauses with the game. `Scene.current = next` switches at once.
+    public static func transition(to next: Scene, duration: Double = 0.5, style: Transition = .fade, color: UInt32 = 0x000000) {
+        guard duration > 0 else { return current = next }
+        changing = Change(next: next, duration: duration, style: style, color: color)
+    }
 
-    /// One update of the game: the current scene's, unless it's fading out.
+    /// The transition under way, if any.
+    static var changing: Change?
+
+    /// One update of the game: the current scene's, unless it's standing still for a transition.
     static func tick(_ dt: Double) {
-        guard var fade = fading else { return current.update(dt) }
-        fade.time += dt
-        if let next = fade.next, fade.time >= fade.duration / 2 { (current, fade.next) = (next, nil) }
-        fading = fade.time < fade.duration ? fade : nil
-        if fade.next == nil { current.update(dt) }
+        guard var change = changing else { return current.update(dt) }
+        change.time += dt
+        if let next = change.next, change.time >= change.switchTime { (current, change.next) = (next, nil) }
+        changing = change.time < change.duration ? change : nil
+        if change.next == nil { current.update(dt) }
     }
 
     /// Puts an entity in the scene with its top-left corner at `position`, in world pixels.
@@ -92,12 +106,14 @@ import PixelKitProtocol
             entity.update(dt)
             entity.sprite?.time += dt
             for i in entity.parts.indices { entity.parts[i].sprite.time += dt }
+            entity.light?.time += dt
         }
         tilemap?.time += dt
     }
 
     /// Call super to draw the tilemap and entities, then draw anything on top (like a HUD) in screen pixels. The
-    /// map's layers above and the entities' parts above draw over the entities, in that order.
+    /// map's layers above and the entities' parts above draw over the entities, in that order, and then, if the scene
+    /// is dark, its `darkness` over them all, but where `light`s light it.
     open func draw(_ screen: Screen) {
         if let follow { camera = Self.camera(following: follow.box(at: follow.position), view: screen.size, map: tilemap?.size) }
         screen.offset = camera.rounded(.down)
@@ -106,6 +122,12 @@ import PixelKitProtocol
         for entity in order { entity.draw(screen) }
         if let tilemap, !tilemap.above.isEmpty { screen.draw(tilemap, layers: tilemap.above.sorted()) }
         for entity in order { entity.draw(screen, above: true) }
+        if darkness > 0 {
+            let lights = entities.compactMap { entity in
+                entity.light.map { (screen.middle(of: entity), $0.radius(seed: ObjectIdentifier(entity).hashValue), $0.color) }
+            }
+            screen.light(lights, darkness: darkness, color: darknessColor)
+        }
         screen.offset = .zero
     }
 
@@ -126,15 +148,81 @@ import PixelKitProtocol
     }
 }
 
-/// A switch to another scene through a color, from `Scene.fade(to:duration:color:)`.
-struct Fade {
-    var next: Scene? // until the switch, halfway through
+/// How `Scene.transition(to:duration:style:color:)` goes from one scene to the next.
+public enum Transition: Sendable, Equatable {
+    /// The view fades to the color and back.
+    case fade
+    /// The color sweeps over the view from a side, then on off the other, the next scene coming in behind it.
+    case wipe(from: Side)
+    /// The view closes to the color in a circle around the entity the camera follows (`Scene.follow`), or the middle
+    /// of the view, then opens around the next scene's.
+    case iris
+    /// The scene breaks up into the next one, its pixels going in a pattern, with no color between them.
+    case dissolve
+
+    /// Where a wipe comes in.
+    public enum Side: Sendable { case left, right, top, bottom }
+}
+
+/// A switch to another scene under way, from `Scene.transition(to:duration:style:color:)`.
+struct Change {
+    var next: Scene? // until the switch
     let duration: Double
+    let style: Transition
     let color: UInt32
     var time = 0.0
+    var snapped = false // a dissolve's copy of the last frame, taken as it draws first
 
-    /// How much of the color covers the view: from none to all of it at the switch, then back.
-    var opacity: Double { max(0, 1 - abs(time / duration * 2 - 1)) }
+    /// When `next` becomes current: once the color covers the view, halfway, or for a dissolve at once.
+    var switchTime: Double { style == .dissolve ? 0 : duration / 2 }
+
+    /// How much the color covers: from none to all of the view at the switch, then back. A fade's opacity.
+    var cover: Double { max(0, 1 - abs(time / duration * 2 - 1)) }
+
+    /// How much of the old scene a dissolve keeps: all of it, then none.
+    var kept: Double { max(0, 1 - time / duration) }
+
+    /// What a wipe from `side` covers: growing from that side until the switch, then shrinking off the other.
+    func wiped(from side: Transition.Side, view: Size) -> Rect {
+        let across = side == .left || side == .right
+        let length = across ? view.width : view.height
+        let covered = Int((cover * Double(length)).rounded())
+        var start = time < duration / 2 ? 0 : length - covered // from the side it comes in at
+        if side == .right || side == .bottom { start = length - start - covered }
+        return across ? Rect(x: start, y: 0, width: covered, height: view.height) : Rect(x: 0, y: start, width: view.width, height: covered)
+    }
+
+    /// The radius of an iris around `center`, in canvas pixels: from the view's farthest corner to nothing at the
+    /// switch, then back.
+    func radius(around center: Vector, view: Size) -> Double {
+        let (width, height) = (Double(view.width), Double(view.height))
+        let corners: [Vector] = [[0, 0], [width, 0], [0, height], [width, height]]
+        return corners.map { (($0 - center) * ($0 - center)).sum().squareRoot() }.max()! * (1 - cover)
+    }
+
+    /// Draws it over everything the scene drew: the color, or the old scene's last frame breaking up.
+    @MainActor func draw(_ screen: Screen, over scene: Scene) {
+        let view = screen.size
+        screen.offset = .zero
+        switch style {
+        case .fade:
+            screen.fill(Rect(x: 0, y: 0, width: view.width, height: view.height), color: color, opacity: cover)
+        case let .wipe(side):
+            screen.fill(wiped(from: side, view: view), color: color)
+        case .iris:
+            let center = scene.follow.map { screen.middle(of: $0) - scene.camera.rounded(.down) } ?? [Double(view.width) / 2, Double(view.height) / 2]
+            let radius = radius(around: center, view: view)
+            for y in 0..<view.height { // the row's pixels left and right of the circle
+                let dy = Double(y) + 0.5 - center.y
+                let half = radius > abs(dy) ? (radius * radius - dy * dy).squareRoot() : 0
+                let (left, right) = (Int((center.x - half).rounded()), Int((center.x + half).rounded()))
+                screen.fill(Rect(x: 0, y: y, width: min(max(left, 0), view.width), height: 1), color: color)
+                screen.fill(Rect(x: max(right, 0), y: y, width: view.width - min(max(right, 0), view.width), height: 1), color: color)
+            }
+        case .dissolve:
+            screen.quad(screen.snapshot, x: 0, y: 0, source: Rect(x: 0, y: 0, width: view.width, height: view.height), keep: kept)
+        }
+    }
 }
 
 /// Anything that lives in a scene: the player, enemies, pickups.
@@ -157,6 +245,8 @@ struct Fade {
     /// The map's object it was made from, for its properties. It's set after `init()` runs, so read it in a `lazy var`:
     /// `lazy var speed = object?.double("speed") ?? 40`.
     public var object: Tilemap.Object?
+    /// The light it gives off in a dark scene (`Scene.darkness`), from its middle, like a torch's; nil gives none.
+    public var light: Light?
     var remainder = Vector.zero // sub-pixel movement not applied yet
 
     public init() {}
@@ -281,6 +371,10 @@ public struct Sprite: Sendable {
     public var color: UInt32 = 0xFFFFFF
     /// From 0, invisible, to 1, the default: for ghosts, or things that fade out.
     public var opacity = 1.0
+    /// Mixes the sprite's pixels toward white, keeping its shape: from 0, as they are (the default), to 1, all white.
+    /// Set it to 1 when something's hit, and lower it in each update for a flash that fades:
+    /// `sprite.flash = max(0, sprite.flash - dt * 8)`.
+    public var flash = 0.0
     var time = 0.0
 
     /// A sprite of one of the game's images: `Sprite(.slime)`.
@@ -292,6 +386,30 @@ public struct Sprite: Sendable {
     /// Starts the named animation. Playing the one that's already running keeps it going, so it's fine every frame.
     public mutating func play(_ animation: String) {
         if animation != self.animation { (self.animation, time) = (animation, 0) }
+    }
+}
+
+/// The light an entity gives off in a dark scene (`Scene.darkness`), from its middle: a torch, a fireplace, a lantern
+/// or a glowing mushroom. Where lights meet, they add up.
+public struct Light: Sendable {
+    /// How far it reaches, in pixels: it's brightest in the middle and fades to nothing there.
+    public var radius: Double
+    /// Its color, 0xRRGGBB: white, or a fire's orange. A darker color is a dimmer light.
+    public var color: UInt32
+    /// How much its radius wavers, from 0, steady, to 1: about 0.1 for a torch.
+    public var flicker: Double
+    var time = 0.0 // advanced by the scene's updates, so a paused game's flames stand still
+
+    public init(radius: Double, color: UInt32 = 0xFFFFFF, flicker: Double = 0) {
+        (self.radius, self.color, self.flicker) = (radius, color, flicker)
+    }
+
+    /// The radius now: smaller by up to `flicker` of it, wavering a few times a second. `seed` sets lights apart, so two
+    /// torches don't flicker as one.
+    func radius(seed: Int) -> Double {
+        let phase = Double(seed % 1000)
+        let wave = (sin(time * 13 + phase) + sin(time * 31 + phase * 2)) / 4 + 0.5 // 0 to 1, two waves that hardly repeat
+        return radius * (1 - flicker * wave)
     }
 }
 
