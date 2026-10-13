@@ -39,7 +39,9 @@ final class Title: Scene {
 
 Then `swift run`. A window opens on a 320×180 canvas; press Space for a new color.
 
-Next, give it a sprite: put a PNG in `Assets/Sprites/` (say `Assets/Sprites/player.png`), and add an `Entity` whose `sprite = Sprite("player")` (or `Sprite(.player)` once the editor has named your assets, below). Games find assets by name in any folder of `Assets`, so sprites, tilesets, maps, objects and sounds each get a folder of their own. [`Examples/Platformer`](Examples/Platformer) shows a whole game: a level, animations, collisions and sounds. [`Examples/Village`](Examples/Village) is a top-down one: walking behind trees and under roofs (`ySort` and layers above), a camera that follows, a door that fades into a house, a villager in a text box, and saves.
+Games read the mouse and fingers too, for menus, puzzles and anything tapped or dragged: `Input.pointer` is where the mouse is over the game, or a finger on it, in canvas pixels (nil when there's none), and `Input.pressed(.pointer)` is a click or a tap, as `Input.pressed(.a)` is a button. Add the scene's `camera` for world pixels: `if Input.pressed(.pointer), let point = Input.pointer, chest.contains(point + camera)`.
+
+Next, give it a sprite: put a PNG in `Assets/Sprites/` (say `Assets/Sprites/player.png`), and add an `Entity` whose `sprite = Sprite("player")` (or `Sprite(.player)` once the editor has named your assets, below). Games find assets by name in any folder of `Assets`, so sprites, tilesets, maps, objects and sounds each get a folder of their own. [`Examples/Platformer`](Examples/Platformer) shows a whole game: a level, animations, collisions and sounds. [`Examples/Village`](Examples/Village) is a top-down one: walking behind trees and under roofs (`ySort` and layers above), a camera that follows, a door that fades into a house, a villager in a text box that a click or a tap moves on, and saves.
 
 ## The editor
 
@@ -79,7 +81,7 @@ PIXELKIT_LOCAL="$PWD" swift run Editor
 
 ## iPhone and iPad
 
-Games run in the iOS Simulator too, reaching the screen's edges, with a D-pad and A, B, X and Y buttons drawn over the game, or below it when the phone is upright; game controllers and iPad keyboards work as well. Add `.iOS(.v18)` to your game's `platforms` (New Game does), then choose an iPhone simulator in the editor's toolbar and press ⌘R. The simulator's screen shows in the preview, in Xcode's frame for the device: click and drag to touch it, click it to type, and press Home or Rotate in its bar (and Fold or Unfold on iPhone Duo). Or, from this repo:
+Games run in the iOS Simulator too, reaching the screen's edges, with a D-pad and A, B, X and Y buttons drawn over the game, or below it when the phone is upright; game controllers and iPad keyboards work as well, and the buttons hide while they're used, coming back with a touch. A finger on the game that isn't on the buttons is its pointer. Add `.iOS(.v18)` to your game's `platforms` (New Game does), then choose an iPhone simulator in the editor's toolbar and press ⌘R. The simulator's screen shows in the preview, in Xcode's frame for the device: click and drag to touch it, click it to type, and press Home or Rotate in its bar (and Fold or Unfold on iPhone Duo). Or, from this repo:
 
 ```bash
 scripts/make-ios-app.sh path/to/MyGame MyGame.app

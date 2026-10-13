@@ -231,6 +231,13 @@ func fit(_ canvas: Size, in drawable: CGSize) -> MTLViewport {
                        width: width, height: height, znear: 0, zfar: 1)
 }
 
+/// The canvas pixel at `point` when the canvas shows in `viewport` (`fit`'s or `letterbox`'s, in the same units, from
+/// the top left), in whole pixels, and off the canvas when the point is.
+func pixel(at point: CGPoint, in viewport: MTLViewport, canvas: Size) -> Vector {
+    let scale = viewport.width / Double(canvas.width)
+    return [((point.x - viewport.originX) / scale).rounded(.down), ((point.y - viewport.originY) / scale).rounded(.down)]
+}
+
 /// The biggest whole-number scale of `canvas` that fits in `drawable` (at least 1x), centered.
 func letterbox(_ canvas: Size, in drawable: CGSize) -> MTLViewport {
     let (w, h) = (Int(drawable.width), Int(drawable.height))

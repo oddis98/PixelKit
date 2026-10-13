@@ -41,6 +41,11 @@ public struct Rect: Sendable, Equatable {
     public func intersects(_ other: Rect) -> Bool {
         x < other.x + other.width && other.x < x + width && y < other.y + other.height && other.y < y + height
     }
+
+    /// True when `point` is in it, like `Input.pointer` on a button drawn in canvas pixels.
+    public func contains(_ point: Vector) -> Bool {
+        point.x >= Double(x) && point.x < Double(x + width) && point.y >= Double(y) && point.y < Double(y + height)
+    }
 }
 
 /// An image in the game's `Assets`, by its file's name without ".png": a sprite, a tileset, a font or a text box. The
@@ -128,12 +133,16 @@ public extension Game {
         window.contentMinSize = NSSize(width: size.width, height: size.height)
         window.contentView = view
         window.makeFirstResponder(view)
+        window.acceptsMouseMovedEvents = true // the mouse over the game, without its button
         let center = NotificationCenter.default
         center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { _ in
             exit(0) // closing the window quits the game
         }
         center.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) { _ in
-            MainActor.assumeIsolated { Input.keys.removeAll() } // key-ups go elsewhere once we lose focus
+            MainActor.assumeIsolated { // key-ups and the mouse go elsewhere once we lose focus
+                Input.keys.removeAll()
+                Input.point(nil, down: false)
+            }
         }
         window.center()
         window.makeKeyAndOrderFront(nil)

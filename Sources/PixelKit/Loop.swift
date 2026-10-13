@@ -17,6 +17,7 @@ import PixelKitProtocol
     init(resolution: Size, device: MTLDevice) {
         queue = device.makeCommandQueue()!
         screen = Screen(size: resolution, device: device, format: .bgra8Unorm)
+        Input.canvas = resolution
     }
 
     /// Runs the updates that are due, then draws the scene into the canvas on a new command buffer.
@@ -77,6 +78,8 @@ final class GameView: MTKView {
         colorPixelFormat = .bgra8Unorm
         #if os(macOS)
         colorspace = CGColorSpace(name: CGColorSpace.sRGB) // show asset colors exactly as they are in the PNG
+        // Moves come as the window's first responder (`acceptsMouseMovedEvents`); this says when the mouse leaves.
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
         #endif
     }
 
@@ -86,10 +89,25 @@ final class GameView: MTKView {
     override var acceptsFirstResponder: Bool { true }
     override func keyDown(with event: NSEvent) { Input.keys.insert(Int(event.keyCode)) }
     override func keyUp(with event: NSEvent) { Input.keys.remove(Int(event.keyCode)) }
+    override func mouseDown(with event: NSEvent) { point(event, down: true) }
+    override func mouseDragged(with event: NSEvent) { point(event, down: true) }
+    override func mouseUp(with event: NSEvent) { point(event, down: false) }
+    override func mouseMoved(with event: NSEvent) { point(event, down: false) }
+    override func mouseExited(with event: NSEvent) { if NSEvent.pressedMouseButtons & 1 == 0 { Input.point(nil, down: false) } }
+
+    /// The mouse, through the letterbox, in canvas pixels. The view's y goes up, the drawable's down.
+    private func point(_ event: NSEvent, down: Bool) {
+        let (point, scale, canvas) = (convert(event.locationInWindow, from: nil), drawableSize.width / bounds.width, loop.screen.size)
+        let drawn = CGPoint(x: point.x * scale, y: (bounds.height - point.y) * scale)
+        Input.point(pixel(at: drawn, in: letterbox(canvas, in: drawableSize), canvas: canvas), down: down)
+    }
     #endif
 
     override func draw(_ dirtyRect: CGRect) {
         guard let drawable = currentDrawable, let window = currentRenderPassDescriptor, let commands = loop.tick() else { return }
+        #if os(iOS)
+        if Input.hardware { for case let controls as TouchControls in subviews { controls.shown = false } }
+        #endif
         let screen = loop.screen
         screen.begin(commands, window)
         #if os(iOS)
@@ -135,6 +153,7 @@ final class GameView: MTKView {
     func handle(_ message: Message) {
         switch message {
         case let .keys(keys): Input.keys = Set(keys)
+        case let .pointer(x, y, down): Input.point([Double(x), Double(y)], down: down)
         case .pause: loop.paused = true
         case .resume: loop.paused = false
         case .step: loop.steps += 1

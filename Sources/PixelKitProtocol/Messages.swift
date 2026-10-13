@@ -8,6 +8,9 @@ public enum Message: Equatable, Sendable {
     case frame(width: Int, height: Int, pixels: Data)
     /// Editor to game: key codes held down in the preview.
     case keys([Int])
+    /// Editor to game: the mouse over the preview, in canvas pixels, off the canvas (-1) once it's left, and whether its
+    /// button is down.
+    case pointer(x: Int, y: Int, down: Bool)
     /// Editor to game: stop updating, carry on, or run one update while paused.
     case pause, resume, step
     /// Editor to game: a library with the game's recompiled code, to switch to without restarting.
@@ -37,6 +40,11 @@ extension Message {
         case let .reload(path):
             tag = 6
             payload.append(Data(path.utf8))
+        case let .pointer(x, y, down):
+            tag = 7
+            append(Int16(clamping: x))
+            append(Int16(clamping: y))
+            append(UInt8(down ? 1 : 0))
         }
         var data = Data()
         withUnsafeBytes(of: UInt32(payload.count + 1).littleEndian) { data.append(contentsOf: $0) }
@@ -70,6 +78,8 @@ extension Message {
         case 4: self = .resume
         case 5: self = .step
         case 6: self = .reload(String(decoding: payload, as: UTF8.self))
+        case 7 where payload.count >= 5:
+            self = .pointer(x: Int(Int16(truncatingIfNeeded: number(at: 0))), y: Int(Int16(truncatingIfNeeded: number(at: 2))), down: payload[4] != 0)
         default: return nil
         }
     }

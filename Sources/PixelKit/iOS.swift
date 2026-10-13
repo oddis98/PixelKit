@@ -10,12 +10,12 @@ import CoreGraphics
 struct TouchLayout {
     static let pad = 50.0, button = 26.0 // radii, in points
     static let spread = button * 1.6 // from the diamond's middle to each button's
-    let dpad, a, b, x, y: CGPoint
+    let dpad, middle, a, b, x, y: CGPoint
 
     init(size: CGSize, left: Double, right: Double, bottom: Double) {
         let floor = size.height - max(bottom, 12) - 16
         dpad = CGPoint(x: left + 24 + Self.pad, y: floor - Self.pad)
-        let middle = CGPoint(x: size.width - right - 24 - Self.button - Self.spread, y: floor - Self.button - Self.spread)
+        middle = CGPoint(x: size.width - right - 24 - Self.button - Self.spread, y: floor - Self.button - Self.spread)
         a = CGPoint(x: middle.x + Self.spread, y: middle.y)
         b = CGPoint(x: middle.x, y: middle.y + Self.spread)
         x = CGPoint(x: middle.x, y: middle.y - Self.spread)
@@ -35,6 +35,12 @@ struct TouchLayout {
             held.insert(button) // between two, both: one thumb can press two
         }
         return held
+    }
+
+    /// Whether a finger landing at `point` is the controls': on the D-pad, middle and all, or among the buttons, with the
+    /// slack `buttons(at:)` gives them. The others are the game's pointer.
+    func covers(_ point: CGPoint) -> Bool {
+        hypot(point.x - dpad.x, point.y - dpad.y) < Self.pad * 1.6 || hypot(point.x - middle.x, point.y - middle.y) < Self.spread + Self.button * 1.4
     }
 }
 
@@ -86,9 +92,16 @@ final class GameViewController: UIViewController {
     }
 }
 
-/// A D-pad and A, B, X and Y buttons, drawn over the game. Every finger on them holds the buttons under it.
+/// A D-pad and A, B, X and Y buttons, drawn over the game. Every finger that lands on them holds the buttons under it,
+/// and the first that doesn't is the game's pointer. They hide while a keyboard or controller is used (`GameView`),
+/// and come back with a touch.
 final class TouchControls: UIView {
     private var held: Set<Button> = []
+    private var fingers: Set<UITouch> = [] // on the controls
+    private var pointing: UITouch? // the pointer
+    var shown = true {
+        didSet { if shown != oldValue { setNeedsDisplay() } }
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -104,14 +117,30 @@ final class TouchControls: UIView {
     }
 
     override func safeAreaInsetsDidChange() { setNeedsDisplay() }
-    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) { update(event) }
-    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) { update(event) }
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { update(event) }
-    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { update(event) }
 
-    private func update(_ event: UIEvent?) {
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         let layout = layout
-        let fingers = (event?.allTouches ?? []).filter { $0.phase != .ended && $0.phase != .cancelled }
+        for touch in touches {
+            if shown, layout.covers(touch.location(in: self)) { fingers.insert(touch) } else if pointing == nil { pointing = touch }
+        }
+        shown = true
+        update()
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) { update() }
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) { lift(touches) }
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { lift(touches) }
+
+    private func lift(_ touches: Set<UITouch>) {
+        fingers.subtract(touches)
+        if let pointing, touches.contains(pointing) { self.pointing = nil }
+        update()
+    }
+
+    private func update() {
+        let canvas = GameApp.resolution
+        Input.point(pointing.map { pixel(at: $0.location(in: self), in: fit(canvas, in: bounds.size), canvas: canvas) }, down: pointing != nil)
+        let layout = layout
         let now = fingers.reduce(into: Set<Button>()) { $0.formUnion(layout.buttons(at: $1.location(in: self))) }
         guard now != held else { return }
         held = now
@@ -120,6 +149,7 @@ final class TouchControls: UIView {
     }
 
     override func draw(_ rect: CGRect) {
+        guard shown else { return }
         let layout = layout
         func circle(_ center: CGPoint, _ radius: Double, pressed: Bool) {
             UIColor(white: 1, alpha: pressed ? 0.55 : 0.25).setFill()

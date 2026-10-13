@@ -20,3 +20,10 @@ import Testing
     let game = 402 * 180 / 320.0 // the canvas's height at the top
     #expect(layout.dpad.y - TouchLayout.pad > game && [layout.a, layout.b, layout.x, layout.y].allSatisfy { $0.y - TouchLayout.button > game })
 }
+
+@Test func theControlsKeepTheFingersThatLandOnThemAndTheGameGetsTheRest() {
+    let layout = TouchLayout(size: CGSize(width: 852, height: 393), left: 59, right: 59, bottom: 21) // an iPhone, landscape
+    #expect(layout.covers(layout.dpad) && layout.covers(layout.middle)) // the D-pad's middle and the diamond's, which hold nothing
+    #expect([layout.a, layout.b, layout.x, layout.y].allSatisfy(layout.covers))
+    #expect(!layout.covers(CGPoint(x: 426, y: 100)) && !layout.covers(CGPoint(x: 426, y: 380))) // the game, up top and between them
+}

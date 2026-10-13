@@ -55,7 +55,7 @@ final class Place: Scene {
         super.update(dt)
         guard let page = words.first else { return walk(dt) }
         letters = min(letters + dt * 40, Double(page.count)) // 40 letters a second
-        if Input.pressed(.a) { // the rest of the page, then the next one
+        if Input.pressed(.a) || Input.pressed(.pointer) { // a click or tap too: the rest of the page, then the next one
             if letters < Double(page.count) { letters = Double(page.count) } else { (words, letters) = (Array(words.dropFirst()), 0) }
         }
     }

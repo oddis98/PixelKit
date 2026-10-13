@@ -198,6 +198,10 @@ struct Fade {
     /// True when the hitbox overlaps `box`, in world pixels, like a door's from `Tilemap.Object.box`.
     public func overlaps(_ box: Rect) -> Bool { self.box(at: position).intersects(box) }
 
+    /// True when `point`, in world pixels, is in the hitbox, like the pointer plus the scene's camera:
+    /// `if Input.pressed(.pointer), let point = Input.pointer, chest.contains(point + camera)`.
+    public func contains(_ point: Vector) -> Bool { box(at: position).contains(point) }
+
     func slide(_ pixels: Int, axis: Int) -> Bool {
         for _ in 0..<abs(pixels) {
             var next = position
