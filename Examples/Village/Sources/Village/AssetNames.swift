@@ -5,6 +5,7 @@
 import PixelKit
 
 extension ImageName {
+    static let appIcon = ImageName("AppIcon")
     static let house = ImageName("house")
     static let player = ImageName("player")
     static let textbox = ImageName("textbox")

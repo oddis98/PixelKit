@@ -63,7 +63,7 @@ Drag art from Finder onto the Project navigator to copy it in: onto `Assets`, ea
 
 The toolbar's New menu, like File ▸ New, makes a sprite, tileset, map or object in its folder, and Organize Assets, in the `Assets` folder's context menu, sorts an older game's files into those folders without renaming anything.
 
-New Game (⇧⌘N) writes a starter game that gets PixelKit from this repo on GitHub. Export App… makes it a Mac app, whose icon is the game's `Assets/AppIcon.png` if it has one: square pixel art, drawn right to the edges, since macOS rounds the corners.
+New Game (⇧⌘N) writes a starter game that gets PixelKit from this repo on GitHub. Export App… makes it a Mac app, whose icon is the game's `Assets/AppIcon.png` if it has one: square pixel art, drawn right to the edges, since macOS rounds the corners (see Shipping, below).
 
 To bundle the editor as an app:
 
@@ -97,6 +97,18 @@ PROFILE=path/to/profile.mobileprovision IDENTITY="Apple Development: …" script
 
 ```bash
 xcrun devicectl device install app --device <udid> MyGame.app && xcrun devicectl device process launch --device <udid> --console games.pixelkit.MyGame
+```
+
+## Shipping
+
+Choose the game at the top of the Project navigator for its settings, as Xcode shows a project's: its name on the home screen, bundle identifier, version and build, kept in an `Info.plist` beside its `Package.swift`, and its capabilities, Game Center and iCloud (key-value storage), kept in its `.entitlements` there. Give it a bundle identifier of your own before you distribute it. Its icon is `Assets/AppIcon.png`, square pixel art scaled up without smoothing, on iPhone and iPad too (Draw App Icon there makes one).
+
+Product ▸ Archive builds the game for iPhones and iPads, signed by your team, into Xcode's archives, where Xcode's Organizer lists it too, and offers Distribute App, which signs it for App Store Connect and uploads it, as the Organizer does. Create the app in App Store Connect first, with the same bundle identifier; once Apple has processed the build, TestFlight has it. Xcode makes the App ID, profiles and distribution certificate it needs with the account you're signed in with in its Accounts settings, and the same goes for a game with capabilities the first time it runs on your device.
+
+Export App… signs the Mac app with your team's Developer ID once you add a Developer ID Application certificate in Xcode's Accounts settings (Manage Certificates). To notarize it too, so it opens on other Macs without a warning, store your credentials once, then enter the profile's name (here, `PixelKit`) in the editor's Settings (⌘,):
+
+```bash
+xcrun notarytool store-credentials PixelKit
 ```
 
 ## More
