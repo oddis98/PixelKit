@@ -68,6 +68,9 @@ import Testing
     let a = try #require(Music.player)
     Music.play("b", fade: 0.2)
     #expect(Music.track == "b" && Music.player !== a && a.isPlaying) // still on while it fades out
-    try await Task.sleep(for: .seconds(0.5))
+    // Then it stops, as soon as the main actor gets to it after the fade: the tests beside this one held it up to a
+    // second, so the old track stopped after a fixed half second's sleep had ended, about one run in five.
+    let start = ContinuousClock.now
+    while a.isPlaying, ContinuousClock.now - start < .seconds(10) { try await Task.sleep(for: .milliseconds(50)) }
     #expect(!a.isPlaying)
 }
