@@ -115,6 +115,23 @@ final class Stone: Entity {} // not Placeable
     #expect(scene.tilemap?.objects[1].sprite?.image == "boulder" && scene.tilemap?.objects[1].solid == false)
 }
 
+@MainActor @Test func objectsMadeInCodeAreMadeFromTheirDefinitions() throws {
+    let assets = FileManager.default.temporaryDirectory.appending(path: "made-\(UUID())/Assets")
+    try FileManager.default.createDirectory(at: assets.appending(path: "Objects"), withIntermediateDirectories: true)
+    FileManager.default.changeCurrentDirectoryPath(assets.deletingLastPathComponent().path) // games load Assets/ relative to here
+    try ObjectFile(sprite: "bat", hitbox: .init(x: 2, y: 2, width: 4, height: 4), solid: true, class: "Bat",
+                   properties: [.init(name: "speed", type: .number, value: "20")]).write(to: assets.appending(path: "Objects/bat.object"))
+    let module = Scene.module
+    Scene.module = "PixelKitTests"
+    defer { Scene.module = module }
+    let scene = Scene()
+    let bat = try #require(scene.add(ObjectName("bat"), at: [24, 8], properties: ["speed": "30"]) as? Bat)
+    #expect(scene.entities.count == 1 && bat.scene === scene && bat.position == [24, 8] && bat.object?.position == [24, 8])
+    #expect(bat.madeByInit && bat.sprite?.image == "bat" && bat.solid && bat.hitbox == Rect(x: 2, y: 2, width: 4, height: 4) && bat.speed == 30)
+    let missing = scene.add("nothing", at: .zero) // no definition: an empty Entity, and a word in the console
+    #expect(type(of: missing) == Entity.self && missing.sprite == nil && Scene.warned.contains("nothing.object") && scene.entities.count == 2)
+}
+
 // As the editor writes them in a game's AssetNames.swift.
 extension ImageName { static let dot = ImageName("dot"), tiles = ImageName("tiles"), tiny = ImageName("tiny") }
 extension MapName { static let level = MapName("level") }

@@ -83,9 +83,31 @@ import PixelKitProtocol
         }
     }
 
+    /// Makes the object `name` from its definition, `Assets/Objects/<name>.object`, as `addObjects()` makes a map's,
+    /// as if placed at `position` with `properties` of its own over the definition's, and adds it: something the player
+    /// builds, or a creature that comes out at night.
+    @discardableResult public func add(_ name: ObjectName, at position: Vector, properties: [String: String] = [:]) -> Entity {
+        add(name.name, at: position, properties: properties)
+    }
+
+    /// The same, with the object named in a string, like a den's `creature`. Without a definition it's an empty
+    /// `Entity`, and the console says why, once.
+    @_disfavoredOverload @discardableResult
+    public func add(_ name: String, at position: Vector, properties: [String: String] = [:]) -> Entity {
+        let url = assetURL("\(name).object")
+        var definition: ObjectFile?
+        do { definition = try ObjectFile(contentsOf: url) } catch {
+            if Self.warned.insert("\(name).object").inserted { print("PixelKit: can't make \(name) from \(url.path): \(error.localizedDescription)") }
+        }
+        let placed = TilemapFile.Object(name: name, x: Int(position.x), y: Int(position.y), properties: properties)
+        let entity = Self.make(Tilemap.Object(placed, definition: definition, tileSize: tilemap?.tileSize ?? 16, frame: frameSize))
+        add(entity, at: position)
+        return entity
+    }
+
     /// The game's module, for finding its classes by name; `Game.main()` sets it.
     static var module = ""
-    static var warned: Set<String> = [] // classes the console said something about
+    static var warned: Set<String> = [] // classes and objects the console said something about
 
     /// An object made as its class, or as an `Entity` if it names none, or one that's missing or isn't `Placeable`
     /// (the console says why, once).
