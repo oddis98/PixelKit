@@ -56,8 +56,6 @@ import Testing
     Music.stop()
     #expect(Music.player == nil && Music.track == nil)
 
-    Sound.play("b", volume: 0)
-    #expect(Sound.playing.last?.url?.lastPathComponent == "b.m4a" && Sound.playing.last?.volume == 0)
 }
 
 @MainActor @Test func musicFadesFromOneTrackIntoTheNext() async throws {

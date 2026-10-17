@@ -153,8 +153,9 @@ extension ObjectName { static let door = ObjectName("door") }
     defer { Music.stop(); Music.volume = 1 }
     Music.play(.a, fade: 0)
     #expect(Music.track == "a" && Music.player?.url?.lastPathComponent == "a.wav")
+    Sound.read = [:] // what other tests' folders had of the same name
     Sound.play(.b, volume: 0)
-    #expect(Sound.playing.last?.url?.lastPathComponent == "b.m4a")
+    #expect(Sound.read["b"]?.url.lastPathComponent == "b.m4a")
 
     let device = try #require(MTLCreateSystemDefaultDevice())
     let screen = Screen(size: Size(8, 8), device: device, format: .bgra8Unorm)

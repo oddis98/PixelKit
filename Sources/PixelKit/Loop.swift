@@ -18,6 +18,7 @@ import PixelKitProtocol
         queue = device.makeCommandQueue()!
         screen = Screen(size: resolution, device: device, format: .bgra8Unorm)
         Input.canvas = resolution
+        Sound.mixer.prepare() // so the first sounds don't wait for the audio engine
     }
 
     /// Runs the updates that are due, then draws the scene into the canvas on a new command buffer.
@@ -41,6 +42,7 @@ import PixelKitProtocol
             screen.reloadChangedAssets()
             Scene.current.tilemap?.reloadIfChanged()
             Music.restartIfChanged()
+            Sound.forgetChanged()
         }
 
         guard let commands = queue.makeCommandBuffer() else { return nil }
