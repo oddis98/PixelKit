@@ -11,6 +11,13 @@ import AVFoundation
         mixer.play(buffer(name), volume: Float(volume))
     }
 
+    /// From 0 to 1, what every sound's own volume is multiplied by, those playing too: a game's setting for its sound
+    /// effects, as `Music.volume` is for its music.
+    public static var volume: Double {
+        get { Double(mixer.volume) }
+        set { mixer.volume = Float(min(max(newValue, 0), 1)) }
+    }
+
     /// Each sound played so far, read in full, by name, with its file and when that last changed, to read it again then.
     static var read: [String: (buffer: AVAudioPCMBuffer, url: URL, modified: Date?)] = [:]
     static let mixer = Mixer()
@@ -48,6 +55,10 @@ import AVFoundation
     /// The voices for each format of sound, and until when each is busy, in `CACurrentMediaTime()`'s seconds.
     var voices: [(format: AVAudioFormat, voices: [(player: AVAudioPlayerNode, until: Double)])] = []
     static let most = 8 // of a format at once
+    /// `Sound.volume`: the main mixer's, which adds up the voices, so it reaches those playing.
+    var volume: Float = 1 {
+        didSet { engine.mainMixerNode.outputVolume = volume }
+    }
 
     /// The game's, playing to the output; a test's, rendering offline.
     init(engine: AVAudioEngine = AVAudioEngine()) { self.engine = engine }

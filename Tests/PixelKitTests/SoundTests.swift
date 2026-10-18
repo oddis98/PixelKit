@@ -64,4 +64,19 @@ import Testing
     #expect(try settles(at: 0.25)) // at its volume
     mixer.play(sound, volume: 1) // on a second voice, over the first
     #expect(try settles(at: 0.75))
+    // The sounds' volume, a game's setting, turns down both of those already playing, then all of them off.
+    mixer.volume = 0.5
+    #expect(try settles(at: 0.375))
+    mixer.volume = 0
+    #expect(try settles(at: 0))
+}
+
+@MainActor @Test func theSoundsVolumeIsTheMixersFromNothingToAll() {
+    defer { Sound.volume = 1 }
+    Sound.volume = 0.3
+    #expect(Sound.mixer.volume == 0.3 && Sound.mixer.engine.mainMixerNode.outputVolume == 0.3 && abs(Sound.volume - 0.3) < 0.0001)
+    Sound.volume = 2
+    #expect(Sound.volume == 1)
+    Sound.volume = -1
+    #expect(Sound.volume == 0)
 }
