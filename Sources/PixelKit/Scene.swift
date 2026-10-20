@@ -1,5 +1,6 @@
 import Foundation
 import PixelKitProtocol
+import Synchronization
 
 /// A level, menu or screen: a tilemap plus the entities in it.
 @MainActor open class Scene {
@@ -94,15 +95,35 @@ import PixelKitProtocol
     /// `Entity`, and the console says why, once.
     @_disfavoredOverload @discardableResult
     public func add(_ name: String, at position: Vector, properties: [String: String] = [:]) -> Entity {
-        let url = assetURL("\(name).object")
-        var definition: ObjectFile?
-        do { definition = try ObjectFile(contentsOf: url) } catch {
-            if Self.warned.insert("\(name).object").inserted { print("PixelKit: can't make \(name) from \(url.path): \(error.localizedDescription)") }
-        }
         let placed = TilemapFile.Object(name: name, x: Int(position.x), y: Int(position.y), properties: properties)
-        let entity = Self.make(Tilemap.Object(placed, definition: definition, tileSize: tilemap?.tileSize ?? 16, frame: frameSize))
+        let entity = Self.make(Tilemap.Object(placed, definition: Self.definition(name), tileSize: tilemap?.tileSize ?? 16, frame: frameSize))
         add(entity, at: position)
         return entity
+    }
+
+    /// `Assets/Objects/<name>.object`, read `once`; nil if it can't be, which the console says, once.
+    static func definition(_ name: String) -> ObjectFile? {
+        once(name, in: definitionsRead) {
+            let url = assetURL("\(name).object")
+            do { return try ObjectFile(contentsOf: url) } catch {
+                if warned.insert("\(name).object").inserted { print("PixelKit: can't make \(name) from \(url.path): \(error.localizedDescription)") }
+                return nil
+            }
+        }
+    }
+
+    /// In an app, reads every object's definition, and the size of its sprite's frames, in the background as the game
+    /// starts, so making one in code, like a creature that comes out at night, reads no file on the main thread: the
+    /// first boar took 4 ms on an iPhone.
+    nonisolated static func readAhead() {
+        guard !assetsCanChange else { return }
+        DispatchQueue.global(qos: .utility).async {
+            for name in bundledNames(["object"]) {
+                guard let definition = try? ObjectFile(contentsOf: assetURL("\(name).object")) else { continue } // said as it's made
+                definitionsRead.withLock { if $0[name] == nil { $0[name] = definition } }
+                if let sprite = definition.sprite { _ = frameSize(sprite) }
+            }
+        }
     }
 
     /// The game's module, for finding its classes by name; `Game.main()` sets it.
@@ -516,6 +537,10 @@ public struct Light: Sendable {
     }
 }
 
+/// Object definitions and maps, read `once`.
+let definitionsRead = Mutex<[String: ObjectFile?]>([:])
+let mapsLoaded = Mutex<[String: Tilemap]>([:])
+
 /// A grid of tiles from a tileset, `<tileset>.png` in `Assets` or a folder in it, cut into `tileSize` squares numbered
 /// left to right, then top to bottom.
 ///
@@ -597,11 +622,21 @@ public struct Tilemap: Sendable {
 
     /// Loads a map named in a string, like a door's `to`.
     @_disfavoredOverload public init(_ name: String) {
-        (tileset, tileSize, width, height, layers, solid) = ("", 0, 0, 0, [], [])
-        do { try load(name) } catch {
+        // `once`: in an app, going back to a map, like the island from a house, reads nothing again (25 to 39 ms on an
+        // iPhone for Driftwood's island).
+        do {
+            self = try once(name, in: mapsLoaded) {
+                var map = Tilemap()
+                try map.load(name)
+                return map
+            }
+        } catch {
             fatalError("PixelKit: can't load \(assetURL("\(name).tilemap").path): \(error.localizedDescription)")
         }
     }
+
+    /// An empty map, for `load` to fill.
+    private init() { (tileset, tileSize, width, height, layers, solid) = ("", 0, 0, 0, [], []) }
 
     mutating func load(_ name: String) throws {
         let map = try TilemapFile(contentsOf: assetURL("\(name).tilemap"))

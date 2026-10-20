@@ -18,43 +18,49 @@ import Testing
     return folder
 }
 
+/// The music's player, once the players have done what they were asked so far, on their queue.
+@MainActor func musicPlayer() -> AVAudioPlayer? {
+    Music.queue.sync {}
+    return Music.player
+}
+
 @MainActor @Test func musicKeepsItsTrackSwitchesStopsPausesWithTheGameAndStartsOverWhenTheFileChanges() throws {
     _ = try silentTracks()
     Music.volume = 0
     defer { Music.stop(); Music.volume = 1 }
 
     Music.play("a")
-    let a = try #require(Music.player)
+    let a = try #require(musicPlayer())
     Music.play("a")
-    #expect(Music.player === a && a.isPlaying)
+    #expect(musicPlayer() === a && a.isPlaying)
     Music.play("b")
-    let b = try #require(Music.player)
+    let b = try #require(musicPlayer())
     #expect(b !== a && !a.isPlaying && b.url?.lastPathComponent == "b.m4a")
 
     Music.restartIfChanged()
-    #expect(Music.player === b) // the file didn't change
+    #expect(musicPlayer() === b) // the file didn't change
     try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: 10)], ofItemAtPath: "Assets/b.m4a")
     Music.restartIfChanged()
-    #expect(Music.player !== b && Music.track == "b" && Music.player?.isPlaying == true)
+    #expect(musicPlayer() !== b && Music.track == "b" && Music.player?.isPlaying == true)
 
     // Pausing the game holds the track's place, and one that starts or restarts meanwhile waits for the resume.
     let loop = Loop(resolution: Size(8, 8), device: try #require(MTLCreateSystemDefaultDevice()))
-    let playing = try #require(Music.player)
+    let playing = try #require(musicPlayer())
     loop.paused = true
-    #expect(!playing.isPlaying)
+    #expect(musicPlayer() === playing && !playing.isPlaying)
     loop.paused = false
-    #expect(Music.player === playing && playing.isPlaying) // resumed, not started over
+    #expect(musicPlayer() === playing && playing.isPlaying) // resumed, not started over
     loop.paused = true
     try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: 20)], ofItemAtPath: "Assets/b.m4a")
     Music.restartIfChanged()
-    #expect(Music.player !== playing && Music.player?.isPlaying == false)
+    #expect(musicPlayer() !== playing && Music.player?.isPlaying == false)
     Music.play("a")
-    #expect(Music.track == "a" && Music.player?.isPlaying == false)
+    #expect(Music.track == "a" && musicPlayer()?.isPlaying == false)
     loop.paused = false
-    #expect(Music.player?.isPlaying == true)
+    #expect(musicPlayer()?.isPlaying == true)
 
     Music.stop()
-    #expect(Music.player == nil && Music.track == nil)
+    #expect(musicPlayer() == nil && Music.track == nil)
 
 }
 
@@ -63,11 +69,11 @@ import Testing
     Music.volume = 0
     defer { Music.stop(); Music.volume = 1 }
     Music.play("a")
-    let a = try #require(Music.player)
+    let a = try #require(musicPlayer())
     Music.play("b", fade: 0.2)
-    #expect(Music.track == "b" && Music.player !== a && a.isPlaying) // still on while it fades out
-    // Then it stops, as soon as the main actor gets to it after the fade: the tests beside this one held it up to a
-    // second, so the old track stopped after a fixed half second's sleep had ended, about one run in five.
+    #expect(Music.track == "b" && musicPlayer() !== a && a.isPlaying) // still on while it fades out
+    // Then it stops, on the players' queue once the fade is over. (When the main actor stopped it, the tests beside
+    // this one held it up to a second, so a fixed half second's sleep ended first about one run in five.)
     let start = ContinuousClock.now
     while a.isPlaying, ContinuousClock.now - start < .seconds(10) { try await Task.sleep(for: .milliseconds(50)) }
     #expect(!a.isPlaying)

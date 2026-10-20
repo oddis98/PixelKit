@@ -165,22 +165,35 @@ public extension Game {
         #endif
     }()
 
-    /// Saves `value` as `<name>.json` in one step, so quitting halfway never leaves half a save. If it can't, the
-    /// console says why.
+    /// Where saves are written, in order, off the main thread: writing one took 4 to 7 ms on an iPhone, which a game that
+    /// saves every second, like Driftwood, paid in a frame each second.
+    nonisolated static let writes = DispatchQueue(label: "PixelKit saves")
+    /// Saves still being written are written before the game quits.
+    private static let finishedOnExit: Void = { atexit { Save.writes.sync {} } }()
+
+    /// Saves `value` as `<name>.json` in one step, so quitting halfway never leaves half a save: encoded at once, then
+    /// written off the main thread. If it can't be, the console says why.
     public static func write(_ value: some Encodable, to name: String) {
-        do {
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(value).write(to: folder.appending(path: "\(name).json"), options: .atomic)
-        } catch {
-            print("PixelKit: can't save \(name): \(error.localizedDescription)")
+        _ = finishedOnExit
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data: Data
+        do { data = try encoder.encode(value) } catch { return print("PixelKit: can't save \(name): \(error.localizedDescription)") }
+        let file = folder.appending(path: "\(name).json")
+        writes.async {
+            do {
+                try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try data.write(to: file, options: .atomic)
+            } catch {
+                print("PixelKit: can't save \(name): \(error.localizedDescription)")
+            }
         }
     }
 
     /// What was saved as `<name>.json`; nil if nothing was, or if it no longer decodes because its type changed while
     /// the game was being made (the console says why).
     public static func read<Value: Decodable>(_ type: Value.Type, from name: String) -> Value? {
+        writes.sync {} // after the saves still being written
         let file = folder.appending(path: "\(name).json")
         guard let data = try? Data(contentsOf: file) else { return nil }
         do {

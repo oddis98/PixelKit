@@ -3,11 +3,11 @@ import PixelKitProtocol
 
 /// The game loop: fixed 60 Hz updates, then the scene draws into the small canvas.
 @MainActor final class Loop {
-    static let step = 1.0 / 60
+    nonisolated static let step = 1.0 / 60
     let screen: Screen
     let queue: MTLCommandQueue
     var last = CACurrentMediaTime()
-    var lag = 0.0 // time not simulated yet
+    var pace = Pace()
     var frames = 0
     var paused = false {
         didSet { Music.paused = paused }
@@ -19,26 +19,23 @@ import PixelKitProtocol
         screen = Screen(size: resolution, device: device, format: .bgra8Unorm)
         Input.canvas = resolution
         Sound.mixer.prepare() // so the first sounds don't wait for the audio engine
+        Sound.readAhead() // in an app, the files of its sounds and objects, in the background, so none is waited for
+        Scene.readAhead()
     }
 
-    /// Runs the updates that are due, then draws the scene into the canvas on a new command buffer.
-    func tick() -> MTLCommandBuffer? {
-        let now = CACurrentMediaTime()
-        var elapsed = now - last
+    /// Runs the updates that are due at `now`, when the frame will be on the screen, then draws the scene into the canvas
+    /// on a new command buffer.
+    func tick(at now: Double = CACurrentMediaTime()) -> MTLCommandBuffer? {
+        let elapsed = now - last
         last = now
-        if abs(elapsed - Self.step) < 0.002 { elapsed = Self.step } // absorb vsync jitter: one update per 60 Hz frame
         if paused {
             for _ in 0..<steps { update() }
-            (steps, lag) = (0, 0)
+            (steps, pace) = (0, Pace())
         } else {
-            lag = min(lag + elapsed, 0.25) // after a stall, slow down instead of running a burst of catch-up updates
-            while lag >= Self.step {
-                update()
-                lag -= Self.step
-            }
+            for _ in 0..<pace.updates(after: elapsed) { update() }
         }
         frames += 1
-        if frames % 15 == 0 { // 4 times a second
+        if assetsCanChange, frames % 15 == 0 { // 4 times a second, but not in an app, whose files can't change
             screen.reloadChangedAssets()
             Scene.current.tilemap?.reloadIfChanged()
             Music.restartIfChanged()
@@ -68,23 +65,83 @@ import PixelKitProtocol
     }
 }
 
+/// How many of the game's 60 Hz updates a frame runs, from the time since the last frame. On a 60 Hz display, one for
+/// each refresh since then, give or take 2 ms, so a frame drawn a little late, or a display a hair off 60 Hz, still runs
+/// one; at other rates, as many as the time adds up to.
+struct Pace {
+    /// Time not simulated yet, kept half an update from where a frame would run one more or one less, so a frame a little
+    /// early or late can't tip it either way. At 0, as a stall used to leave it, a frame 3 ms late ran two updates and the
+    /// next one none: the picture stood still, then jumped.
+    var lag = Loop.step / 2
+    static let most = 15 // in a frame: after a stall, the game slows down for a moment rather than run a burst of updates
+
+    mutating func updates(after elapsed: Double) -> Int {
+        let refreshes = (elapsed / Loop.step).rounded()
+        if refreshes >= 1, abs(elapsed - refreshes * Loop.step) < 0.002 {
+            lag = Loop.step / 2
+            return min(Int(refreshes), Self.most)
+        }
+        lag = min(lag + elapsed, (Double(Self.most) + 0.5) * Loop.step)
+        var due = 0
+        while lag >= Loop.step {
+            lag -= Loop.step
+            due += 1
+        }
+        return due
+    }
+}
+
 /// Shows the game in its own window, the canvas scaled up by whole numbers, or on iOS, the app's screen, edge to edge.
+/// A display link draws it 60 times a second, rather than the view's own timer, and says when each frame will be on the
+/// screen: the loop counts the time between frames from that, not from when `draw` gets to run, which other work on the
+/// main thread, like a touch handled first, can make a few milliseconds late.
 final class GameView: MTKView {
     let loop: Loop
+    private var link: CADisplayLink?
+    private var shows: Double? // when the frame being drawn will be on the screen, from `link`
 
     init(resolution: Size) {
         let device = MTLCreateSystemDefaultDevice()!
         loop = Loop(resolution: resolution, device: device)
         super.init(frame: .zero, device: device)
         colorPixelFormat = .bgra8Unorm
+        (isPaused, enableSetNeedsDisplay) = (true, false) // drawn by `link`
         #if os(macOS)
         colorspace = CGColorSpace(name: CGColorSpace.sRGB) // show asset colors exactly as they are in the PNG
         // Moves come as the window's first responder (`acceptsMouseMovedEvents`); this says when the mouse leaves.
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+        #else
+        run(CADisplayLink(target: self, selector: #selector(refresh)))
+        // Stopped in the background, where iOS doesn't let an app use the GPU.
+        let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(background), name: UIApplication.didEnterBackgroundNotification, object: nil)
+        center.addObserver(self, selector: #selector(foreground), name: UIApplication.willEnterForegroundNotification, object: nil)
         #endif
     }
 
     required init(coder: NSCoder) { fatalError("GameView is created in code") }
+
+    private func run(_ link: CADisplayLink) {
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 60, preferred: 60)
+        link.add(to: .main, forMode: .common)
+        self.link = link
+    }
+
+    @objc private func refresh(_ link: CADisplayLink) {
+        shows = link.targetTimestamp
+        draw()
+    }
+
+    #if os(iOS)
+    @objc private func background() { link?.isPaused = true }
+    @objc private func foreground() { link?.isPaused = false }
+    #else
+    /// The display link of the screen the window is on, which follows it to another.
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if window != nil, link == nil { run(displayLink(target: self, selector: #selector(refresh))) }
+    }
+    #endif
 
     #if os(macOS)
     override var acceptsFirstResponder: Bool { true }
@@ -105,7 +162,10 @@ final class GameView: MTKView {
     #endif
 
     override func draw(_ dirtyRect: CGRect) {
-        guard let drawable = currentDrawable, let window = currentRenderPassDescriptor, let commands = loop.tick() else { return }
+        // The frame first, then a drawable to show it in, held no longer than it takes to draw into it.
+        guard let commands = loop.tick(at: shows ?? CACurrentMediaTime()) else { return }
+        defer { commands.commit() } // with or without a drawable, for the canvas a dissolve copies
+        guard let drawable = currentDrawable, let window = currentRenderPassDescriptor else { return }
         #if os(iOS)
         if Input.hardware { for case let controls as TouchControls in subviews { controls.shown = false } }
         #endif
@@ -119,7 +179,6 @@ final class GameView: MTKView {
         screen.quad(screen.canvas, x: 0, y: 0, source: Rect(x: 0, y: 0, width: screen.size.width, height: screen.size.height))
         screen.end()
         commands.present(drawable)
-        commands.commit()
     }
 }
 

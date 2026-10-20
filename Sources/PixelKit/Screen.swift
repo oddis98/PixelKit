@@ -365,26 +365,51 @@ fragment float4 glowFragment(Vertex in [[stage_in]]) {
 /// Where a game file, `<name>.<extension>`, is: anywhere in `Assets`, at the top first, then in its folders by path, so
 /// games keep their sprites, maps and sounds in folders and find them by name. `Assets` is inside the app once the game
 /// has been exported, otherwise in the folder the game runs in (the editor runs games in their project folder).
-/// A file that isn't where it was, or wasn't there, is looked for again at most once a second (the loop checks loaded
-/// files every frame), so files added or moved while the game runs are found.
+/// A file that isn't where it was, or wasn't there, is looked for again once a folder in `Assets` has changed, which is
+/// looked at no more than once a second (the loop checks loaded files 4 times a second), so files added or moved while
+/// the game runs are found. In an app, whose files can't change, it's never looked for again.
 func assetURL(_ file: String) -> URL {
     let root = bundledAssets ?? URL(fileURLWithPath: "Assets")
     return assetIndex.withLock { index in
         func found() -> URL? { index.files[file].flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil } }
         if index.root == root, let url = found() { return url }
-        if index.root != root || Date().timeIntervalSince(index.built) >= 1 { index.build(root) }
+        if index.root != root || index.stale() { index.build(root) }
         return found() ?? root.appending(path: file)
     }
 }
 
 private let bundledAssets = Bundle.main.url(forResource: "Assets", withExtension: nil)
+/// Whether the game's files can change while it runs, saved by the editor: not once they're inside an app, where
+/// they're signed, as on an iPhone or iPad. Only then does the loop look for files that changed.
+let assetsCanChange = bundledAssets == nil
 let assetIndex = Mutex(AssetIndex())
+
+/// The names of the files in an app's `Assets` with one of `extensions`, without it; none outside an app.
+func bundledNames(_ extensions: Set<String>) -> [String] {
+    guard let root = bundledAssets else { return [] }
+    let names = (FileManager.default.subpaths(atPath: root.path) ?? []).compactMap { path -> String? in
+        let file = (path as NSString).lastPathComponent as NSString
+        return extensions.contains(file.pathExtension) ? file.deletingPathExtension : nil
+    }
+    return Set(names).sorted()
+}
+
+/// What `read` makes of the file `key`, kept in `kept` the first time in an app, whose files can't change, so it's
+/// read once; read each time where they can (`keeping` false), as in the editor, which may have saved it since.
+func once<Value: Sendable>(_ key: String, in kept: borrowing Mutex<[String: Value]>, keeping: Bool = !assetsCanChange,
+                           _ read: () throws -> Value) rethrows -> Value {
+    if keeping, let value = kept.withLock({ $0[key] }) { return value }
+    let value = try read()
+    if keeping { kept.withLock { $0[key] = value } }
+    return value
+}
 
 /// The files in `Assets` and its folders, by name.
 struct AssetIndex {
     var root: URL?
     var files: [String: URL] = [:]
-    var built = Date.distantPast
+    var folders: [(url: URL, modified: Date?)] = [] // `Assets` and its folders, which change as a file in one is added, moved or deleted
+    var checked = Date.distantPast // when the folders were last looked at
     var warned: Set<String> = []
 
     /// Names must be unique among files of one type; of two, the first by path wins, and the console says so.
@@ -392,30 +417,50 @@ struct AssetIndex {
         let paths = (FileManager.default.subpaths(atPath: root.path) ?? [])
             .filter { !$0.split(separator: "/").contains { $0.hasPrefix(".") } } // the editor's, like an image's layers
             .sorted { ($0.contains("/") ? 1 : 0, $0) < ($1.contains("/") ? 1 : 0, $1) }
-        (self.root, files, built) = (root, [:], Date())
+        (self.root, files, folders, checked) = (root, [:], [(root, modificationDate(root))], Date())
         for path in paths {
+            let url = root.appending(path: path)
+            var folder: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &folder), folder.boolValue { folders.append((url, modificationDate(url))) }
             let name = (path as NSString).lastPathComponent
             if let first = files[name] {
                 if warned.insert(name).inserted { print("PixelKit: Assets has two files called \(name), so it uses \(first.path), not \(path)") }
             } else {
-                files[name] = root.appending(path: path)
+                files[name] = url
             }
         }
     }
+
+    /// Whether a file may have been added, moved or deleted since it was built: once one of its folders has changed,
+    /// looked at no more than once a second. Building it takes a couple of milliseconds; this, a microsecond or two a folder.
+    mutating func stale() -> Bool {
+        guard assetsCanChange, Date().timeIntervalSince(checked) >= 1 else { return false }
+        checked = Date()
+        return folders.contains { modificationDate($0.url) != $0.modified }
+    }
 }
 
+/// When the file at `url` last changed; nil without one. From `stat`, in a microsecond or two, where FileManager's
+/// attributes took 10 to 20 for each file the loop checks.
 func modificationDate(_ url: URL) -> Date? {
-    try? FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
+    var status = stat()
+    guard url.withUnsafeFileSystemRepresentation({ $0.map { stat($0, &status) } }) == 0 else { return nil }
+    return Date(timeIntervalSince1970: Double(status.st_mtimespec.tv_sec) + Double(status.st_mtimespec.tv_nsec) / 1_000_000_000)
 }
 
-/// The size of `Assets/<name>.png`'s frames, as its `.json` cuts it up, or of the whole image; nil without one.
+/// The size of `Assets/<name>.png`'s frames, as its `.json` cuts it up, or of the whole image; nil without one. Read
+/// `once`.
 func frameSize(_ name: String) -> Size? {
-    guard let source = CGImageSourceCreateWithURL(assetURL("\(name).png") as CFURL, nil),
-          let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-          let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int else { return nil }
-    let sheet = try? SheetFile(contentsOf: assetURL("\(name).json"))
-    return Size(sheet?.frameWidth ?? width, sheet?.frameHeight ?? height)
+    once(name, in: framesRead) {
+        guard let source = CGImageSourceCreateWithURL(assetURL("\(name).png") as CFURL, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int else { return nil }
+        let sheet = try? SheetFile(contentsOf: assetURL("\(name).json"))
+        return Size(sheet?.frameWidth ?? width, sheet?.frameHeight ?? height)
+    }
 }
+
+let framesRead = Mutex<[String: Size?]>([:])
 
 extension SheetFile.Animation {
     /// The frame showing `time` seconds in, looping; nil without frames.

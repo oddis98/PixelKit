@@ -1,6 +1,7 @@
 import Foundation
 import Metal
 import PixelKitProtocol
+import Synchronization
 import Testing
 @testable import PixelKit
 
@@ -20,11 +21,22 @@ import Testing
     try FileManager.default.createDirectory(at: game.appending(path: "Assets/Sounds"), withIntermediateDirectories: true)
     try Data().write(to: game.appending(path: "Assets/Sounds/coin.wav"))
     #expect(assetURL("coin.wav").path.hasSuffix("/Assets/coin.wav")) // looked for again at most once a second
-    assetIndex.withLock { $0.built = .distantPast }
+    assetIndex.withLock { $0.checked = .distantPast }
     #expect(assetURL("coin.wav").path.hasSuffix("/Assets/Sounds/coin.wav"))
     try FileManager.default.moveItem(at: game.appending(path: "Assets/Sprites/Enemies/bat.png"), to: game.appending(path: "Assets/Sprites/bat.png"))
-    assetIndex.withLock { $0.built = .distantPast }
+    assetIndex.withLock { $0.checked = .distantPast }
     #expect(assetURL("bat.png").path.hasSuffix("/Assets/Sprites/bat.png")) // moved while the game runs
+}
+
+@Test func filesAreReadOnceInAnAppAndEachTimeWhereTheyCanChange() {
+    let kept = Mutex<[String: Int]>([:])
+    var reads = 0
+    func read() -> Int {
+        reads += 1
+        return reads
+    }
+    #expect(once("a", in: kept, keeping: true, read) == 1 && once("a", in: kept, keeping: true, read) == 1) // in an app
+    #expect(once("b", in: kept, keeping: true, read) == 2 && once("a", in: kept, keeping: false, read) == 3) // in the editor
 }
 
 @Test func objectFilesRoundTripAndAnEmptyOneIsAMarker() throws {
@@ -152,7 +164,7 @@ extension ObjectName { static let door = ObjectName("door") }
     Music.volume = 0
     defer { Music.stop(); Music.volume = 1 }
     Music.play(.a, fade: 0)
-    #expect(Music.track == "a" && Music.player?.url?.lastPathComponent == "a.wav")
+    #expect(Music.track == "a" && musicPlayer()?.url?.lastPathComponent == "a.wav")
     Sound.read = [:] // what other tests' folders had of the same name
     Sound.play(.b, volume: 0)
     #expect(Sound.read["b"]?.url.lastPathComponent == "b.m4a")

@@ -22,21 +22,32 @@ import AVFoundation
     static var read: [String: (buffer: AVAudioPCMBuffer, url: URL, modified: Date?)] = [:]
     static let mixer = Mixer()
 
-    /// The sound `name`, read from its file the first time it plays.
+    /// The sound `name`, read from its file the first time it plays, unless `readAhead` has.
     static func buffer(_ name: String) -> AVAudioPCMBuffer {
         if let sound = read[name] { return sound.buffer }
         guard let url = soundURL(name) else { fatalError("PixelKit: Assets has no \(name).wav, .m4a, .mp3 or .caf") }
         do {
-            let file = try AVAudioFile(forReading: url)
-            guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(max(1, file.length))) else {
-                fatalError("PixelKit: can't play \(url.path): it's too long to hold")
-            }
-            try file.read(into: buffer)
-            let sound = stereo(buffer)
+            guard let sound = try readSound(url) else { fatalError("PixelKit: can't play \(url.path): it's too long to hold") }
             read[name] = (sound, url, modificationDate(url))
             return sound
         } catch {
             fatalError("PixelKit: can't play \(url.path): \(error.localizedDescription)")
+        }
+    }
+
+    /// In an app, reads its sounds up to 10 seconds long in the background as the game starts, so none is read from its
+    /// file on the main thread as it first plays, 2 to 4 ms on an iPhone. Longer ones, like music, are read as they first
+    /// play, and in the editor every one is, so a sound saved meanwhile is the new one.
+    static func readAhead() {
+        guard !assetsCanChange else { return }
+        DispatchQueue.global(qos: .utility).async {
+            for name in bundledNames(["wav", "m4a", "mp3", "caf"]) {
+                guard let url = soundURL(name), let sound = try? readSound(url, longest: 10) else { continue }
+                let handed = Handed(value: sound)
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated { if read[name] == nil { read[name] = (handed.value, url, modificationDate(url)) } }
+                }
+            }
         }
     }
 
@@ -120,6 +131,21 @@ import AVFoundation
     }
 }
 
+/// The sound in the file at `url`, read in full and in two channels (`stereo`); nil when it's longer than `longest`
+/// seconds, or too long to hold.
+func readSound(_ url: URL, longest: Double = .infinity) throws -> AVAudioPCMBuffer? {
+    let file = try AVAudioFile(forReading: url)
+    guard Double(file.length) <= longest * file.processingFormat.sampleRate,
+          let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(max(1, file.length))) else { return nil }
+    try file.read(into: buffer)
+    return stereo(buffer)
+}
+
+/// A value made on one thread and handed to another, which alone uses it from then on.
+struct Handed<Value>: @unchecked Sendable {
+    let value: Value
+}
+
 /// `buffer` in two channels, a mono one's in both, as an `AVAudioPlayer` plays it: the mixer would pan one channel to
 /// the middle, 3 dB down.
 func stereo(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer {
@@ -145,14 +171,23 @@ func voice(_ until: [Double], now: Double, most: Int) -> Voice {
 }
 
 /// Background music: one track at a time, looping. It keeps playing through scene changes and code reloads, pauses
-/// with the game in the editor, and starts over when its file changes.
+/// with the game in the editor, and starts over when its file changes. Its players are made, started and stopped on a
+/// queue of their own, off the main thread: on an iPhone, starting a track took 25 to 47 ms, and stopping the old one
+/// after its fade about as long, each a frame or two missed at every door and every dusk.
 @MainActor public enum Music {
-    static var player: AVAudioPlayer?
+    /// The players' work, in the order it's asked for.
+    nonisolated static let queue = DispatchQueue(label: "PixelKit music")
+    /// The track's player, and those fading out, used on `queue` only.
+    nonisolated(unsafe) static var player: AVAudioPlayer?
+    nonisolated(unsafe) static var fading: [ObjectIdentifier: AVAudioPlayer] = [:]
     static var track: String?
     static var modified: Date? // of the track's file when it started
     /// While the game is paused, the track holds its place, and one that starts meanwhile waits.
     static var paused = false {
-        didSet { if paused { player?.pause() } else { player?.play() } }
+        didSet {
+            let paused = paused
+            queue.async { if paused { player?.pause() } else { player?.play() } }
+        }
     }
 
     /// Loops `<name>` (.wav, .m4a, .mp3 or .caf) from `Assets` or a folder in it. Playing the track that's already on
@@ -162,42 +197,63 @@ func voice(_ until: [Double], now: Double, most: Int) -> Voice {
 
     /// Loops a track named in a string, like one named after a map.
     @_disfavoredOverload public static func play(_ name: String, fade: Double = 0) {
-        if name != track { start(name, audioPlayer(name), fade: fade) }
+        guard name != track else { return }
+        guard let url = soundURL(name) else { fatalError("PixelKit: Assets has no \(name).wav, .m4a, .mp3 or .caf") }
+        start(name, url, fade: fade)
     }
 
     /// Stops the music.
     public static func stop() {
-        player?.stop()
-        (player, track) = (nil, nil)
+        track = nil
+        queue.async {
+            player?.stop()
+            player = nil
+        }
     }
 
     /// From 0 to 1.
     public static var volume = 1.0 {
-        didSet { player?.volume = Float(volume) }
-    }
-
-    /// Starts the track over if its file changed. One that can't be read yet, like a file still being saved, waits.
-    static func restartIfChanged() {
-        guard let track, let url = soundURL(track), modificationDate(url) != modified,
-              let new = try? AVAudioPlayer(contentsOf: url) else { return }
-        start(track, new)
-    }
-
-    private static func start(_ name: String, _ new: AVAudioPlayer, fade: Double = 0) {
-        if let old = player, fade > 0 {
-            old.setVolume(0, fadeDuration: fade)
-            Task { // the old player plays on until it's silent
-                try? await Task.sleep(for: .seconds(fade))
-                old.stop()
-            }
-        } else {
-            player?.stop()
+        didSet {
+            let volume = Float(volume)
+            queue.async { player?.volume = volume }
         }
-        new.numberOfLoops = -1
-        new.volume = fade > 0 ? 0 : Float(volume)
-        if !paused { new.play() }
-        if fade > 0 { new.setVolume(Float(volume), fadeDuration: fade) }
-        (player, track, modified) = (new, name, new.url.flatMap(modificationDate))
+    }
+
+    /// Starts the track over if its file changed. One that can't be read yet, like a file still being saved, leaves the
+    /// old one playing until it changes again.
+    static func restartIfChanged() {
+        guard let track, let url = soundURL(track), modificationDate(url) != modified else { return }
+        start(track, url, ifReadable: true)
+    }
+
+    /// Plays the file at `url` as the track `name`, looping, in place of the one playing, which fades out over `fade`
+    /// seconds as this one fades in.
+    private static func start(_ name: String, _ url: URL, fade: Double = 0, ifReadable: Bool = false) {
+        (track, modified) = (name, modificationDate(url))
+        let (volume, paused) = (Float(volume), paused)
+        queue.async {
+            #if os(iOS)
+            _ = audioSession
+            #endif
+            let new: AVAudioPlayer
+            do { new = try AVAudioPlayer(contentsOf: url) } catch {
+                if ifReadable { return }
+                fatalError("PixelKit: can't play \(url.path): \(error.localizedDescription)")
+            }
+            if let old = player, fade > 0 { // it plays on until it's silent
+                old.setVolume(0, fadeDuration: fade)
+                let id = ObjectIdentifier(old)
+                fading[id] = old
+                queue.asyncAfter(deadline: .now() + fade) { fading.removeValue(forKey: id)?.stop() }
+            } else {
+                player?.stop()
+            }
+            new.numberOfLoops = -1
+            new.volume = fade > 0 ? 0 : volume
+            if !paused { new.play() }
+            if fade > 0 { new.setVolume(volume, fadeDuration: fade) }
+            player = new
+        }
     }
 }
 
@@ -210,15 +266,3 @@ func soundURL(_ name: String) -> URL? {
 /// Sounds mix with other apps' audio, and the silent switch mutes them. Set before the first sound or track plays.
 private let audioSession: Void = { try? AVAudioSession.sharedInstance().setCategory(.ambient) }()
 #endif
-
-func audioPlayer(_ name: String) -> AVAudioPlayer {
-    #if os(iOS)
-    _ = audioSession
-    #endif
-    guard let url = soundURL(name) else { fatalError("PixelKit: Assets has no \(name).wav, .m4a, .mp3 or .caf") }
-    do {
-        return try AVAudioPlayer(contentsOf: url)
-    } catch {
-        fatalError("PixelKit: can't play \(url.path): \(error.localizedDescription)")
-    }
-}
