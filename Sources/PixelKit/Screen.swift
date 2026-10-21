@@ -11,12 +11,22 @@ import Synchronization
     let pipeline: MTLRenderPipelineState // sprites, blended by their alpha
     let glow: MTLRenderPipelineState // lights, added up in the light map
     let multiply: MTLRenderPipelineState // the light map over the world
-    let canvas: MTLTexture
+    let smooth: MTLRenderPipelineState // the canvas on the screen, scaled the last little way with linear filtering
+    /// How many times the game's size the canvas is drawn at, a whole number: at 1 everything is on the game's whole
+    /// pixels, at k on k-ths of them, so what moves between them is drawn where it is (`GameView` sets it for the screen).
+    private(set) var scale = 1
+    private(set) var canvas: MTLTexture
     let canvasDescriptor: MTLTextureDescriptor
-    /// What lights add up in, the canvas's size, made the first time a scene is dark.
-    lazy var lightMap = device.makeTexture(descriptor: canvasDescriptor)!
-    /// The last frame before a dissolve, which it draws over the next scene.
-    lazy var snapshot = device.makeTexture(descriptor: canvasDescriptor)!
+    /// What lights add up in, made the first time a scene is dark, and the last frame before a dissolve, which it draws
+    /// over the next scene: the canvas's size, made again when it changes.
+    var lightMap: MTLTexture { canvasSized(&lights) }
+    var snapshot: MTLTexture {
+        get { canvasSized(&lastFrame) }
+        set { lastFrame = newValue }
+    }
+    private var lights: MTLTexture?, lastFrame: MTLTexture?
+    /// How far the frame is from the last update to the next, from 0 to 1, for where entities are drawn (`Entity.drawnAt`).
+    var alpha = 1.0
     let loader: MTKTextureLoader
     var textures: [String: MTLTexture] = [:]
     var sheets: [String: SheetFile?] = [:] // nil: the image has no .json, so it's a single frame
@@ -61,12 +71,27 @@ import Synchronization
         pipeline = state("spriteFragment", rgb: (.sourceAlpha, .oneMinusSourceAlpha), alpha: (.one, .oneMinusSourceAlpha))
         glow = state("glowFragment", rgb: (.one, .one), alpha: (.one, .one))
         multiply = state("spriteFragment", rgb: (.destinationColor, .zero), alpha: (.zero, .one))
+        smooth = state("smoothFragment", rgb: (.one, .zero), alpha: (.one, .zero))
 
         let texture = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: format, width: size.width, height: size.height, mipmapped: false)
         texture.usage = [.renderTarget, .shaderRead]
         texture.storageMode = .private
         (canvasDescriptor, canvas) = (texture, device.makeTexture(descriptor: texture)!)
+    }
+
+    /// Draws the canvas at `scale` times the game's size from the next frame on.
+    func resize(to scale: Int) {
+        guard scale != self.scale else { return }
+        self.scale = scale
+        (canvasDescriptor.width, canvasDescriptor.height) = (size.width * scale, size.height * scale)
+        canvas = device.makeTexture(descriptor: canvasDescriptor)!
+        (lights, lastFrame) = (nil, nil)
+    }
+
+    private func canvasSized(_ texture: inout MTLTexture?) -> MTLTexture {
+        if texture == nil { texture = device.makeTexture(descriptor: canvasDescriptor)! }
+        return texture!
     }
 
     /// Draws all of `Assets/<image>.png` with its top-left corner at (x, y), snapped to whole pixels.
@@ -99,9 +124,11 @@ import Synchronization
         let texture = texture(map.tileset)
         let tile = Size(map.tileSize, map.tileSize)
         let frames = map.frames(sheet(map.tileset)?.animations)
-        let (left, top) = (Int(offset.x.rounded(.up)), Int(offset.y.rounded(.up))) // the world pixel `quad` puts in the canvas's corner
-        let columns = stride(from: max(map.cell(left), 0), through: min(map.cell(left + size.width - 1), map.width - 1), by: 1)
-        let rows = stride(from: max(map.cell(top), 0), through: min(map.cell(top + size.height - 1), map.height - 1), by: 1)
+        // The world pixels the canvas shows any of, the camera on them or between them.
+        let (left, top) = (Int(offset.x.rounded(.down)), Int(offset.y.rounded(.down)))
+        let (right, bottom) = (Int((offset.x + Double(size.width)).rounded(.up)) - 1, Int((offset.y + Double(size.height)).rounded(.up)) - 1)
+        let columns = stride(from: max(map.cell(left), 0), through: min(map.cell(right), map.width - 1), by: 1)
+        let rows = stride(from: max(map.cell(top), 0), through: min(map.cell(bottom), map.height - 1), by: 1)
         for layer in layers ?? Array(map.layers.indices) where map.layers.indices.contains(layer) {
             for row in rows {
                 for column in columns {
@@ -146,10 +173,10 @@ import Synchronization
         sheet(image).map { Size($0.frameWidth, $0.frameHeight) } ?? Size(texture(image).width, texture(image).height)
     }
 
-    /// The middle of an entity, in world pixels: of its sprite's frame, or of its hitbox without one. Its light shines
-    /// from there, and an iris closes on it.
+    /// The middle of an entity where it's drawn, in world pixels: of its sprite's frame, or of its hitbox without one.
+    /// Its light shines from there, and an iris closes on it.
     func middle(of entity: Entity) -> Vector {
-        let corner = entity.position.rounded(.down)
+        let corner = entity.drawnAt
         guard let sprite = entity.sprite else {
             let box = entity.hitbox
             return corner + [Double(box.x), Double(box.y)] + [Double(box.width), Double(box.height)] / 2
@@ -181,10 +208,15 @@ import Synchronization
         start(canvas, multiply)
         let offset = self.offset
         self.offset = .zero
-        quad(lightMap, x: 0, y: 0, source: Rect(x: 0, y: 0, width: size.width, height: size.height))
+        whole(lightMap)
         flush()
         encoder.setRenderPipelineState(pipeline)
         self.offset = offset
+    }
+
+    /// Queues a texture the canvas's size over all of it, with no camera: the light map, the snapshot, the canvas itself.
+    func whole(_ texture: MTLTexture, keep: Double = 1) {
+        quad(texture, x: 0, y: 0, source: Rect(x: 0, y: 0, width: texture.width, height: texture.height), size: size, keep: keep)
     }
 
     /// Copies the canvas as it is, still the last frame, for a dissolve to draw over the next scene.
@@ -252,7 +284,8 @@ import Synchronization
             flush()
             batchTexture = texture
         }
-        let x0 = Float((x - offset.x).rounded(.down)), y0 = Float((y - offset.y).rounded(.down))
+        let k = Double(scale) // corners on k-ths of a pixel, so whole pixels stay whole and the rest lands between
+        let x0 = Float(((x - offset.x) * k).rounded(.down) / k), y0 = Float(((y - offset.y) * k).rounded(.down) / k)
         let (x1, y1) = (x0 + Float(size?.width ?? s.width), y0 + Float(size?.height ?? s.height))
         let (w, h) = (Float(texture.width), Float(texture.height))
         var (u0, u1) = (Float(s.x) / w, Float(s.x + s.width) / w)
@@ -275,9 +308,9 @@ import Synchronization
         batchTexture = nil
     }
 
-    func begin(_ commands: MTLCommandBuffer, _ pass: MTLRenderPassDescriptor) {
+    func begin(_ commands: MTLCommandBuffer, _ pass: MTLRenderPassDescriptor, _ state: MTLRenderPipelineState? = nil) {
         (self.commands, self.pass) = (commands, pass)
-        start(pass, pipeline)
+        start(pass, state ?? pipeline)
     }
 
     private func start(_ pass: MTLRenderPassDescriptor, _ state: MTLRenderPipelineState) {
@@ -286,6 +319,7 @@ import Synchronization
         encoder.setRenderPipelineState(state)
         let canvasSize = [SIMD2<Float>(Float(size.width), Float(size.height))]
         encoder.setVertexBytes(canvasSize, length: MemoryLayout<SIMD2<Float>>.stride, index: 1)
+        encoder.setFragmentBytes([Float(scale)], length: MemoryLayout<Float>.stride, index: 0) // a dissolve's pattern goes by the game's pixels
     }
 
     func end() {
@@ -301,13 +335,21 @@ func clearColor(_ rgb: UInt32) -> MTLClearColor {
 }
 
 /// The biggest scale of `canvas` that fits in `drawable`, so on a phone the game reaches the screen's edges: at the top
-/// when the screen is taller than wide, leaving the rest to the touch controls, and centered otherwise. ponytail: not a
-/// whole number, so some of the game's pixels are a screen pixel wider; on a 3x screen that doesn't show.
+/// when the screen is taller than wide, leaving the rest to the touch controls, and centered otherwise. Not a whole
+/// number, so the canvas, drawn at the nearest whole one (`canvasScale`), is scaled the rest of the way smoothly.
 func fit(_ canvas: Size, in drawable: CGSize) -> MTLViewport {
     let scale = min(drawable.width / Double(canvas.width), drawable.height / Double(canvas.height))
     let (width, height) = (Double(canvas.width) * scale, Double(canvas.height) * scale)
     return MTLViewport(originX: (drawable.width - width) / 2, originY: drawable.height > drawable.width ? 0 : (drawable.height - height) / 2,
                        width: width, height: height, znear: 0, zfar: 1)
+}
+
+/// How many times the game's size the canvas is drawn at for a drawable: the whole number `letterbox` scales it by, so
+/// it reaches the screen pixel for pixel, or where it `fill`s the drawable (`fit`, on iOS) the nearest to that scale,
+/// the canvas then scaled the rest of the way, on an iPhone 16 Pro by 0.99 sideways and 1.005 upright.
+func canvasScale(_ canvas: Size, in drawable: CGSize, fill: Bool) -> Int {
+    guard fill else { return Int(letterbox(canvas, in: drawable).width) / canvas.width }
+    return max(1, Int(min(drawable.width / Double(canvas.width), drawable.height / Double(canvas.height)).rounded()))
 }
 
 /// The canvas pixel at `point` when the canvas shows in `viewport` (`fit`'s or `letterbox`'s, in the same units, from
@@ -346,8 +388,8 @@ vertex Vertex spriteVertex(uint i [[vertex_id]], constant Corner *v [[buffer(0)]
     return { float4(p.x, -p.y, 0, 1), v[i].xyuv.zw, v[i].color, v[i].effects };
 }
 
-fragment float4 spriteFragment(Vertex in [[stage_in]], texture2d<float> t [[texture(0)]]) {
-    uint2 cell = uint2(in.position.xy) % 4;
+fragment float4 spriteFragment(Vertex in [[stage_in]], texture2d<float> t [[texture(0)]], constant float &scale [[buffer(0)]]) {
+    uint2 cell = uint2(in.position.xy / scale) % 4;
     if (bayer[cell.y * 4 + cell.x] / 16 >= in.effects.y) discard_fragment();
     constexpr sampler nearest(filter::nearest);
     float4 c = t.sample(nearest, in.uv) * in.color;
@@ -359,6 +401,13 @@ fragment float4 glowFragment(Vertex in [[stage_in]]) {
     float2 d = in.uv * 2 - 1;
     float glow = saturate(1 - dot(d, d));
     return float4(in.color.rgb * glow * glow, 1);
+}
+
+// The canvas on the screen: at its size there pixel for pixel, or scaled the last little way, which nearest-neighbor
+// would do by making some of the game's pixels a screen pixel wider than the rest.
+fragment float4 smoothFragment(Vertex in [[stage_in]], texture2d<float> t [[texture(0)]]) {
+    constexpr sampler linear(filter::linear);
+    return t.sample(linear, in.uv);
 }
 """
 

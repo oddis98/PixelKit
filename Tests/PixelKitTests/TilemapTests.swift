@@ -129,6 +129,7 @@ func png(width: Int, height: Int, to file: URL) throws {
     #expect(tiles(at: [0, 0]) == 4)
     #expect(tiles(at: [12, 4]) == 9) // between tiles: 3 columns and 3 rows show a part
     #expect(screen.vertices[0][0] == -4 && screen.vertices[0][1] == -4) // the first, column 1 and row 0, half off the canvas
+    #expect(tiles(at: [0.5, 0]) == 6) // between pixels: a third column shows its first pixel
     #expect(tiles(at: [-4, -4]) == 4 && tiles(at: [36, 20]) == 1) // past the top-left and bottom-right corners
     #expect(tiles(at: [100, 0]) == 0)
 }

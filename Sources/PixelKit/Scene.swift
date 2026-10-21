@@ -52,6 +52,7 @@ import Synchronization
 
     /// One update of the game: the current scene's, unless it's standing still for a transition.
     static func tick(_ dt: Double) {
+        for entity in current.entities { entity.before = entity.position + entity.remainder } // where `drawnAt` goes on from
         guard var change = changing else { return current.update(dt) }
         change.time += dt
         if let next = change.next, change.time >= change.switchTime { (current, change.next) = (next, nil) }
@@ -158,8 +159,12 @@ import Synchronization
     /// map's layers above and the entities' parts above draw over the entities, in that order, and then, if the scene
     /// is dark, its `darkness` over them all, but where `light`s light it.
     open func draw(_ screen: Screen) {
-        if let follow { camera = Self.camera(following: follow.box(at: follow.position), view: screen.size, map: tilemap?.size) }
-        screen.offset = camera.rounded(.down)
+        for entity in entities { entity.place(screen.alpha) }
+        if let follow {
+            let middle = follow.drawnAt + [Double(follow.hitbox.x + follow.hitbox.width / 2), Double(follow.hitbox.y + follow.hitbox.height / 2)]
+            camera = Self.camera(following: middle, view: screen.size, map: tilemap?.size)
+        }
+        screen.offset = camera
         if let tilemap { screen.draw(tilemap, layers: tilemap.layers.indices.filter { !tilemap.above.contains($0) }) }
         let order = drawOrder
         for entity in order { entity.draw(screen) }
@@ -180,14 +185,14 @@ import Synchronization
         return entities.enumerated().sorted { ($0.element.sortY, $0.offset) < ($1.element.sortY, $1.offset) }.map(\.element)
     }
 
-    /// The camera that puts `box` in the middle of a `view`, kept inside a `map` of that size, or in the middle of a
-    /// map smaller than the view. Whole pixels, so sprites don't shimmer against the tiles.
-    nonisolated static func camera(following box: Rect, view: Size, map: Size?) -> Vector {
-        func axis(_ middle: Int, _ view: Int, _ map: Int?) -> Double {
-            guard let map else { return Double(middle - view / 2) }
-            return Double(map < view ? (map - view) / 2 : min(max(middle - view / 2, 0), map - view))
+    /// The camera that puts `middle` in the middle of a `view`, kept inside a `map` of that size, or in the middle of a
+    /// map smaller than the view. Between pixels as the entity it follows is, so the two move together.
+    nonisolated static func camera(following middle: Vector, view: Size, map: Size?) -> Vector {
+        func axis(_ middle: Double, _ view: Int, _ map: Int?) -> Double {
+            guard let map else { return middle - Double(view / 2) }
+            return map < view ? Double((map - view) / 2) : min(max(middle - Double(view / 2), 0), Double(map - view))
         }
-        return [axis(box.x + box.width / 2, view.width, map?.width), axis(box.y + box.height / 2, view.height, map?.height)]
+        return [axis(middle.x, view.width, map?.width), axis(middle.y, view.height, map?.height)]
     }
 }
 
@@ -253,7 +258,7 @@ struct Change {
         case let .wipe(side):
             screen.fill(wiped(from: side, view: view), color: color)
         case .iris:
-            let center = scene.follow.map { screen.middle(of: $0) - scene.camera.rounded(.down) } ?? [Double(view.width) / 2, Double(view.height) / 2]
+            let center = scene.follow.map { screen.middle(of: $0) - scene.camera } ?? [Double(view.width) / 2, Double(view.height) / 2]
             let radius = radius(around: center, view: view)
             for y in 0..<view.height { // the row's pixels left and right of the circle
                 let dy = Double(y) + 0.5 - center.y
@@ -263,7 +268,7 @@ struct Change {
                 screen.fill(Rect(x: max(right, 0), y: y, width: view.width - min(max(right, 0), view.width), height: 1), color: color)
             }
         case .dissolve:
-            screen.quad(screen.snapshot, x: 0, y: 0, source: Rect(x: 0, y: 0, width: view.width, height: view.height), keep: kept)
+            screen.whole(screen.snapshot, keep: kept)
         }
     }
 }
@@ -276,7 +281,7 @@ struct Change {
     public var velocity = Vector.zero
     /// The solid part of the entity, relative to `position`.
     public var hitbox = Rect(x: 0, y: 0, width: 16, height: 16)
-    /// What it looks like, drawn at `position`; nil draws nothing.
+    /// What it looks like, drawn at `drawnAt`; nil draws nothing.
     public var sprite: Sprite?
     /// More sprites it's drawn with, each at an offset: a tree's crown, a house's roof, a hat. Those `above` draw over
     /// every entity, as a roof the player walks under does; the rest draw with it, after `sprite`.
@@ -296,8 +301,23 @@ struct Change {
     /// a platformer wants: its player would slip off a ledge it lands on by a few pixels.
     public var cornerSlide = 0
     var remainder = Vector.zero // sub-pixel movement not applied yet
+    /// Where it's drawn this frame, in world pixels: `position` and the part of a pixel `move(_:)` has moved it but not
+    /// yet applied, and on a display faster than 60 frames a second, part of the way there from where it was at the last
+    /// update. Its sprite, parts and light draw from here and the camera follows it; draw what goes with it from here too.
+    public var drawnAt: Vector { position + between }
+    var between = Vector.zero // from `position` to where it's drawn, worked out by the scene for each frame (`place`)
+    var before: Vector? // `position + remainder` as the last update started (`Scene.tick`)
 
     public init() {}
+
+    /// Works out where it's drawn in a frame `alpha` of the way from the last update to the next: that far from where it
+    /// was as the update started to where it is, or there at once after a jump of more than 8 pixels, like a door, or
+    /// when it was added since.
+    func place(_ alpha: Double) {
+        let now = position + remainder
+        guard let before, alpha < 1, Swift.max(abs(now.x - before.x), abs(now.y - before.y)) <= 8 else { return between = remainder }
+        between = before + (now - before) * alpha - position
+    }
 
     /// Makes an entity from an object placed in a map, as `Scene.addObjects()` does: `init()` runs, then it takes the
     /// object's place, hitbox and solidity, and its sprites if it has any, and keeps the object in `object`. A subclass
@@ -326,14 +346,14 @@ struct Change {
     /// Draws the sprite and the parts that aren't above. Override it to draw more, in world pixels, and call super to
     /// keep them.
     open func draw(_ screen: Screen) {
-        if let sprite { screen.draw(sprite, x: position.x, y: position.y) }
+        if let sprite { screen.draw(sprite, x: drawnAt.x, y: drawnAt.y) }
         draw(screen, above: false)
     }
 
     /// Draws the parts that are, or aren't, above: the scene draws those above after the rest.
     func draw(_ screen: Screen, above: Bool) {
         for part in parts where part.above == above {
-            screen.draw(part.sprite, x: position.x + part.offset.x, y: position.y + part.offset.y)
+            screen.draw(part.sprite, x: drawnAt.x + part.offset.x, y: drawnAt.y + part.offset.y)
         }
     }
 

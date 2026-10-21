@@ -8,7 +8,7 @@ import PixelKitProtocol
     let queue: MTLCommandQueue
     var last = CACurrentMediaTime()
     var pace = Pace()
-    var frames = 0
+    var checked = 0.0 // when the loop last looked for files that changed
     var paused = false {
         didSet { Music.paused = paused }
     }
@@ -34,8 +34,9 @@ import PixelKitProtocol
         } else {
             for _ in 0..<pace.updates(after: elapsed) { update() }
         }
-        frames += 1
-        if assetsCanChange, frames % 15 == 0 { // 4 times a second, but not in an app, whose files can't change
+        screen.alpha = pace.alpha
+        if assetsCanChange, now - checked >= 0.25 { // 4 times a second, but not in an app, whose files can't change
+            checked = now
             screen.reloadChangedAssets()
             Scene.current.tilemap?.reloadIfChanged()
             Music.restartIfChanged()
@@ -74,11 +75,15 @@ struct Pace {
     /// next one none: the picture stood still, then jumped.
     var lag = Loop.step / 2
     static let most = 15 // in a frame: after a stall, the game slows down for a moment rather than run a burst of updates
+    /// How far the frame is from the last update to the next, from 0 to 1, as the entities are drawn (`Entity.drawnAt`):
+    /// 1 on a 60 Hz display, where each frame shows its update as it is, and on a faster one how much of the next update's
+    /// time has gone by, so a frame between two updates draws them part of the way.
+    var alpha = 1.0
 
     mutating func updates(after elapsed: Double) -> Int {
         let refreshes = (elapsed / Loop.step).rounded()
         if refreshes >= 1, abs(elapsed - refreshes * Loop.step) < 0.002 {
-            lag = Loop.step / 2
+            (lag, alpha) = (Loop.step / 2, 1)
             return min(Int(refreshes), Self.most)
         }
         lag = min(lag + elapsed, (Double(Self.most) + 0.5) * Loop.step)
@@ -87,22 +92,27 @@ struct Pace {
             lag -= Loop.step
             due += 1
         }
+        alpha = lag / Loop.step
         return due
     }
 }
 
 /// Shows the game in its own window, the canvas scaled up by whole numbers, or on iOS, the app's screen, edge to edge.
-/// A display link draws it 60 times a second, rather than the view's own timer, and says when each frame will be on the
-/// screen: the loop counts the time between frames from that, not from when `draw` gets to run, which other work on the
-/// main thread, like a touch handled first, can make a few milliseconds late. On an iPhone or iPad it's a Metal display
-/// link, which brings each frame's drawable: one taken after the frame could leave a launch a frame behind the screen,
-/// every frame waiting about 12 ms for a drawable and showing 17 ms later. The simulator keeps a `CADisplayLink`: the
-/// Metal one drew about 42 frames a second there, unevenly.
+/// A display link draws it as many times a second as the display shows (120 on ProMotion), rather than the view's own
+/// timer, and says when each frame will be on the screen: the loop counts the time between frames from that, not from
+/// when `draw` gets to run, which other work on the main thread, like a touch handled first, can make a few milliseconds
+/// late; and the canvas is drawn at about the screen's scale (`canvasScale`), so what moves between the game's pixels
+/// moves evenly, and between its 60 updates a second where frames come faster. On an iPhone or iPad it's a Metal display
+/// link at 60 frames a second, which brings each frame's drawable: one taken after the frame could leave a launch a frame
+/// behind the screen, every frame waiting about 12 ms for a drawable and showing 17 ms later. Faster, it's a
+/// `CADisplayLink`, since the Metal one's frames reached an iPhone 16 Pro's screen only every other one at 120 Hz (iOS
+/// 27.2), and the simulator keeps one too: the Metal one drew about 42 frames a second there, unevenly.
 final class GameView: MTKView {
     let loop: Loop
-    private var link: CADisplayLink? // on the Mac and in the simulator
+    private var link: CADisplayLink? // on the Mac, in the simulator, and on a device faster than 60 Hz
     #if os(iOS)
-    private var metalLink: CAMetalDisplayLink? // on an iPhone or iPad
+    private var metalLink: CAMetalDisplayLink? // on a device at 60 Hz
+    private var other = 0 // frames in a row at the other link's rate, as when Low Power Mode starts or stops
     #endif
     private var shows: Double? // when the frame being drawn will be on the screen, from `link` or `metalLink`
 
@@ -119,11 +129,7 @@ final class GameView: MTKView {
         #elseif targetEnvironment(simulator)
         run(CADisplayLink(target: self, selector: #selector(refresh)))
         #else
-        let link = CAMetalDisplayLink(metalLayer: layer as! CAMetalLayer)
-        link.delegate = self
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 60, preferred: 60)
-        link.add(to: .main, forMode: .common)
-        metalLink = link
+        use(metal: false) // and at 60 Hz, a Metal one
         #endif
         #if os(iOS)
         // Stopped in the background, where iOS doesn't let an app use the GPU.
@@ -136,15 +142,45 @@ final class GameView: MTKView {
     required init(coder: NSCoder) { fatalError("GameView is created in code") }
 
     private func run(_ link: CADisplayLink) {
-        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 60, preferred: 60)
+        #if os(macOS)
+        let most = Float(window?.screen?.maximumFramesPerSecond ?? 60) // 144 on the development Mac's display
+        #else
+        let most: Float = 120
+        #endif
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: most, preferred: most)
         link.add(to: .main, forMode: .common)
         self.link = link
     }
 
     @objc private func refresh(_ link: CADisplayLink) {
+        #if os(iOS) && !targetEnvironment(simulator)
+        check(link.targetTimestamp - link.timestamp, metal: false)
+        #endif
         shows = link.targetTimestamp
         draw()
     }
+
+    #if os(iOS) && !targetEnvironment(simulator)
+    /// A Metal display link, or a `CADisplayLink` for a display faster than 60 Hz: at 120 Hz its frames wait about 5 ms
+    /// for a drawable, but all of them reach the screen, 18 to 25 ms after their update, where the Metal one's every other did.
+    private func use(metal: Bool) {
+        link?.invalidate()
+        metalLink?.invalidate()
+        (link, metalLink, other) = (nil, nil, 0)
+        guard metal else { return run(CADisplayLink(target: self, selector: #selector(refresh))) }
+        let link = CAMetalDisplayLink(metalLayer: layer as! CAMetalLayer)
+        link.delegate = self
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120) // to see the display speed up
+        link.add(to: .main, forMode: .common)
+        metalLink = link
+    }
+
+    /// Switches links once the display has kept the other's rate half a second: 60 Hz for the Metal one, faster for the other.
+    private func check(_ interval: Double, metal: Bool) {
+        other = (interval > 1.0 / 90) != metal ? other + 1 : 0
+        if other == 30 { DispatchQueue.main.async { self.use(metal: !metal) } }
+    }
+    #endif
 
     #if os(iOS)
     @objc private func background() { link?.isPaused = true; metalLink?.isPaused = true }
@@ -187,6 +223,12 @@ final class GameView: MTKView {
     /// The frame first, then a drawable to show it in: `link`'s taken now, held no longer than it takes to draw into it,
     /// or the one `metalLink` brought.
     private func frame(_ drawable: () -> CAMetalDrawable?) {
+        #if os(iOS)
+        let fill = true // the screen's edges
+        #else
+        let fill = false // whole numbers
+        #endif
+        loop.screen.resize(to: canvasScale(loop.screen.size, in: drawableSize, fill: fill))
         guard let commands = loop.tick(at: shows ?? CACurrentMediaTime()) else { return }
         defer { commands.commit() } // with or without a drawable, for the canvas a dissolve copies
         guard let drawable = drawable() else { return }
@@ -200,13 +242,13 @@ final class GameView: MTKView {
         // The drawable's own size: `metalLink`'s may be from before the screen turned.
         let size = CGSize(width: drawable.texture.width, height: drawable.texture.height)
         let screen = loop.screen
-        screen.begin(commands, window)
+        screen.begin(commands, window, screen.smooth)
         #if os(iOS)
         screen.encoder.setViewport(fit(screen.size, in: size))
         #else
         screen.encoder.setViewport(letterbox(screen.size, in: size))
         #endif
-        screen.quad(screen.canvas, x: 0, y: 0, source: Rect(x: 0, y: 0, width: screen.size.width, height: screen.size.height))
+        screen.whole(screen.canvas)
         screen.end()
         commands.present(drawable)
     }
@@ -216,6 +258,9 @@ final class GameView: MTKView {
 extension GameView: @preconcurrency CAMetalDisplayLinkDelegate {
     /// A frame for the screen, with the drawable it will show in and when (`metalLink` is on the main run loop).
     func metalDisplayLink(_ link: CAMetalDisplayLink, needsUpdate update: CAMetalDisplayLink.Update) {
+        #if !targetEnvironment(simulator)
+        check(update.targetPresentationTimestamp - (shows ?? 0), metal: true)
+        #endif
         shows = update.targetPresentationTimestamp
         frame { update.drawable }
     }

@@ -25,6 +25,19 @@ private func updates(_ elapsed: [Double]) -> [Int] {
     #expect(updates([5.005, Loop.step + 0.003, Loop.step - 0.003, Loop.step]) == [Pace.most, 1, 1, 1])
 }
 
+@Test func framesFasterThanUpdatesShowTheGameEvenlyBetweenThem() {
+    var sixty = Pace()
+    #expect(sixty.updates(after: Loop.step) == 1 && sixty.alpha == 1) // at 60 Hz each frame shows its update as it is
+    for rate in [72.0, 120, 144] { // how far the game has got as drawn, in updates, goes up by the same each frame
+        var (pace, done, shown) = (Pace(), 0, [Double]())
+        for _ in 0..<Int(rate) {
+            done += pace.updates(after: 1 / rate)
+            shown.append(Double(done) + pace.alpha)
+        }
+        #expect(zip(shown, shown.dropFirst()).allSatisfy { abs($1 - $0 - 60 / rate) < 1e-9 })
+    }
+}
+
 @Test func atOtherRatesTheUpdatesAddUpToTheTime() {
     #expect(updates(Array(repeating: 1.0 / 30, count: 30)) == Array(repeating: 2, count: 30)) // a display at 30 Hz
     for rate in [50.0, 72, 120] { // a second of frames at each runs a second of updates, a frame at most one more than due

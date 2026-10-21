@@ -49,14 +49,15 @@ import Testing
 }
 
 @Test func theCameraKeepsItsEntityInTheMiddleInsideTheMapOrCentersASmallMap() {
-    func camera(_ x: Int, _ y: Int, map: Size? = Size(640, 360)) -> Vector {
-        Scene.camera(following: Rect(x: x, y: y, width: 16, height: 16), view: Size(320, 180), map: map)
+    func camera(_ x: Double, _ y: Double, map: Size? = Size(640, 360)) -> Vector {
+        Scene.camera(following: [x + 8, y + 8], view: Size(320, 180), map: map) // a 16x16 box's middle
     }
     #expect(camera(300, 200) == [148, 118]) // its middle, (308, 208), in the view's
     #expect(camera(10, 10) == [0, 0] && camera(630, 350) == [320, 180]) // at the edges, the map's
     #expect(camera(300, 10) == [148, 0])
     #expect(camera(50, 40, map: Size(128, 96)) == [-96, -42]) // a house smaller than the view sits in the middle of it
     #expect(camera(300, 200, map: nil) == [148, 118])
+    #expect(camera(300.25, 200.75) == [148.25, 118.75]) // between pixels, as the entity is drawn
 }
 
 @MainActor @Test func savesRoundTripAndOnesThatNoLongerDecodeReadAsNil() {
@@ -117,9 +118,9 @@ import Testing
     return texture
 }
 
-/// What `draw` draws on the screen's canvas, cleared to black, as 0xAARRGGBB.
+/// What `draw` draws on the screen's canvas, cleared to black, as 0xAARRGGBB: `scale` pixels for each of the game's.
 @MainActor func render(_ screen: Screen, _ draw: () -> Void) throws -> [UInt32] {
-    let (width, height) = (screen.size.width, screen.size.height)
+    let (width, height) = (screen.canvas.width, screen.canvas.height)
     let commands = try #require(screen.device.makeCommandQueue()?.makeCommandBuffer())
     let pass = MTLRenderPassDescriptor()
     pass.colorAttachments[0].texture = screen.canvas
