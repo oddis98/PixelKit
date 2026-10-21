@@ -1,1 +1,1 @@
-{"hitbox":{"height":8,"width":10,"x":11,"y":38},"solid":true,"sprite":"tree"}
+{"hitbox":{"height":8,"width":10,"x":11,"y":38},"opaque":true,"solid":true,"sprite":"tree"}

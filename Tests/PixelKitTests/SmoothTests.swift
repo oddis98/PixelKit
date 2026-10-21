@@ -15,7 +15,7 @@ import Testing
 @MainActor @Test func atAScaleCornersLandOnItsFractionsOfAPixel() throws {
     let screen = try canvas(Size(16, 2))
     screen.resize(to: 4)
-    #expect(screen.canvas.width == 64 && screen.lightMap.width == 64 && screen.snapshot.height == 8)
+    #expect(screen.canvas.width == 64 && screen.spare.width == 64 && screen.snapshot.height == 8)
     let red = try texture([0xFF00_00FF], width: 1) // RGBA bytes, red first
     let pixels = try render(screen) { screen.quad(red, x: 10.25, y: 0, source: Rect(x: 0, y: 0, width: 1, height: 1)) }
     #expect(colors(pixels, width: 64)[0] == String(repeating: ".", count: 41) + "rrrr" + String(repeating: ".", count: 19))

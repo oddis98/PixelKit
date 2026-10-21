@@ -1,0 +1,168 @@
+import MetalKit
+
+/// A shader in the game's `Assets`, by its `.metal` file's name: `Shader(.ripple)`. See `ImageName`.
+public struct ShaderName: Hashable, Sendable {
+    public let name: String
+    public init(_ name: String) { self.name = name }
+}
+
+/// One of the game's own shaders, `Assets/Shaders/<name>.metal`, and up to 16 numbers for it. Its file holds a Metal
+/// function named as the file, as SwiftUI's shaders are:
+/// - A color shader, `half4 name(float2 position, half4 color, Values values)`, goes on a sprite (`Sprite.shader`) and
+///   makes each of its pixels' colors from the color it would have, its alpha apart; `position` is where the pixel is in
+///   the sprite's frame.
+/// - A layer shader, `half4 name(float2 position, Layer layer, Values values)`, goes on the picture (`Scene.effects`)
+///   and makes each of its pixels from the picture so far, `layer.sample(position)`; `position` is where it is in the view.
+///
+/// Positions are in the game's pixels, between them where the canvas is drawn bigger. `values[0]` to `values[15]` are
+/// the numbers, `values.time` the scene's time in seconds and `values.size` the canvas's size; `noise`, `fbm`,
+/// `dither` and `luma` are there to use. It compiles in the background as it's first used, or in an app as the game
+/// starts, and where files can change, again when its file does. Until then, and if it doesn't compile, what it's on
+/// draws without it, and the console says why: `<file>:<line>:<column>: error: <message>`.
+public struct Shader: Sendable, Equatable {
+    public var name: ShaderName
+    public var values: [Double]
+
+    public init(_ name: ShaderName, _ values: [Double] = []) { (self.name, self.values) = (name, values) }
+
+    /// A shader named in a string.
+    @_disfavoredOverload public init(_ name: String, _ values: [Double] = []) { self.init(ShaderName(name), values) }
+}
+
+/// What a game's shader is used as: on a sprite, or on the picture.
+enum ShaderKind: Sendable { case color, layer }
+
+struct ShaderKey: Hashable {
+    let name: String
+    let kind: ShaderKind
+}
+
+/// A game's shader as it's compiled: its pipeline (and for a sprite that glows, another) once it has, nil if it didn't,
+/// when its file last changed as it was read, and whether it last failed.
+struct Compiled {
+    var state: MTLRenderPipelineState?
+    var glowing: MTLRenderPipelineState?
+    var modified: Date?
+    var compiling = true
+    var failed = false
+}
+
+extension Screen {
+    /// A game's shader's pipelines as `kind` once it has compiled; nil until then, if it doesn't, or without a file.
+    /// Asked for the first time, it starts compiling.
+    func shader(_ name: String, _ kind: ShaderKind) -> (state: MTLRenderPipelineState, glowing: MTLRenderPipelineState?)? {
+        let key = ShaderKey(name: name, kind: kind)
+        guard let compiled = shaders[key] else {
+            compile(key)
+            return nil
+        }
+        return compiled.state.map { ($0, compiled.glowing) }
+    }
+
+    /// Compiles a game's shader in the background, keeping what it drew with until it's done: the file read now, made
+    /// whole (`shaderSource`), then its library and its pipelines.
+    func compile(_ key: ShaderKey) {
+        let url = assetURL("\(key.name).metal")
+        let modified = modificationDate(url)
+        shaders[key, default: Compiled()].modified = modified
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+            shaders[key] = Compiled(modified: modified, compiling: false, failed: true)
+            if warned.insert("\(key.name).metal").inserted { print("PixelKit: Assets has no \(key.name).metal") }
+            return
+        }
+        shaders[key]?.compiling = true
+        let format = canvas.pixelFormat
+        device.makeLibrary(source: shaderSource(text, name: key.name, path: url.path, kind: key.kind), options: nil) { library, error in
+            var made: Compiled?
+            if let library {
+                let blend: (MTLBlendFactor, MTLBlendFactor) = key.kind == .color ? (.sourceAlpha, .oneMinusSourceAlpha) : (.one, .zero)
+                let entry = key.kind == .color ? "pixelkitColor" : "pixelkitLayer"
+                let vertex = key.kind == .color ? "litVertex" : "spriteVertex" // a sprite's lit as the engine's are
+                made = Compiled(state: makeState(library, entry, vertex: vertex, formats: [format], rgb: blend,
+                                                 alpha: key.kind == .color ? (.one, .oneMinusSourceAlpha) : (.one, .zero)),
+                                glowing: key.kind == .color ? makeState(library, entry, vertex: vertex, formats: [format], rgb: (.one, .one), alpha: (.zero, .one)) : nil)
+            }
+            let handed = Handed(value: made), problem = error.map { "\($0.localizedDescription)" }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    // Its errors, or that it compiles once more after them, so the editor drops errors printed for an
+                    // older save, which may finish compiling after the one that fixed them.
+                    if let problem { print(problem.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                    else if self.shaders[key]?.failed == true { print("PixelKit: \(url.path) compiles again") }
+                    var compiled = handed.value ?? Compiled()
+                    (compiled.modified, compiled.compiling, compiled.failed) = (modified, false, problem != nil)
+                    self.shaders[key] = compiled
+                }
+            }
+        }
+    }
+
+    /// Compiles again the game's shaders whose files changed, saved by the editor.
+    func reloadChangedShaders() {
+        for (key, compiled) in shaders where !compiled.compiling && modificationDate(assetURL("\(key.name).metal")) != compiled.modified { compile(key) }
+    }
+
+    /// In an app, compiles its shaders in the background as the game starts, as `Sound.readAhead` reads its sounds, so
+    /// none waits until it's first drawn: each as a color shader, or a layer shader if its function takes a `Layer`.
+    func compileAhead() {
+        guard !assetsCanChange else { return }
+        for name in bundledNames(["metal"]) {
+            guard let text = try? String(contentsOf: assetURL("\(name).metal"), encoding: .utf8) else { continue }
+            compile(ShaderKey(name: name, kind: shaderKind(text, name: name)))
+        }
+    }
+
+    /// What a game's shader is given: the scene's time, the canvas's size, and its numbers (`Values` in the shaders).
+    func values(_ shader: Shader) -> [Float] {
+        var values = [Float(time), 0, Float(size.width), Float(size.height)] + [Float](repeating: 0, count: 16)
+        for (i, value) in shader.values.prefix(16).enumerated() { values[4 + i] = Float(value) }
+        return values
+    }
+
+    /// Runs the scene's effects on the picture in turn, each drawing the canvas into the spare through its layer shader,
+    /// which then becomes the canvas.
+    func apply(_ effects: [Shader]) {
+        for effect in effects {
+            guard let made = shader(effect.name.name, .layer) else { continue }
+            let canvas = current!, picture = self.canvas
+            let pass = MTLRenderPassDescriptor()
+            pass.colorAttachments[0].texture = spare
+            pass.colorAttachments[0].loadAction = .dontCare
+            go(Pass(descriptor: pass, usual: made.state, grid: Double(scale), size: size))
+            queue(picture, [0, 0, Float(size.width), Float(size.height)], values: values(effect))
+            end()
+            turnOver()
+            canvas.descriptor.colorAttachments[0].texture = self.canvas
+            canvas.descriptor.colorAttachments[0].loadAction = .load
+            go(canvas)
+        }
+    }
+}
+
+/// A game's shader file made whole: the engine's header, what its shaders share (`shaderCommon`), then the file with
+/// its lines counted from its own first line (`#line`), so errors name it and its lines, then an entry point that calls
+/// its function, on one line counted as the file's first.
+func shaderSource(_ text: String, name: String, path: String, kind: ShaderKind) -> String {
+    let file = "#line 1 \"\(path.replacingOccurrences(of: "\"", with: "\\\""))\"\n"
+    let entry = switch kind {
+    case .color:
+        "fragment float4 pixelkitColor(Vertex in [[stage_in]], texture2d<float> t [[texture(0)]], texture2d<float> shadowed [[texture(1)]], "
+            + "texture2d<float> open [[texture(2)]], constant View &view [[buffer(0)]], constant Values &values [[buffer(1)]]) { "
+            + "if (order(in.position.xy / view.scale) >= in.effects.y) discard_fragment(); constexpr sampler nearest(filter::nearest); "
+            + "float4 c = t.sample(nearest, in.uv) * in.color; Values v = values; "
+            + "float4 s = float4(\(name)(in.uv * float2(t.get_width(), t.get_height()) - in.more.zw, half4(c), v)); "
+            + "float3 rgb = mix(s.rgb, float3(1), saturate(in.effects.x)); if (in.effects.w > 0.5) return float4(rgb * s.a, s.a); "
+            + "return float4(lit(rgb, in.effects.z, in.shade, in.position.xy, view, shadowed, open), s.a); }"
+    case .layer:
+        "fragment float4 pixelkitLayer(Vertex in [[stage_in]], texture2d<float> picture [[texture(0)]], constant View &view [[buffer(0)]], "
+            + "constant Values &values [[buffer(1)]]) { Values v = values; Layer layer = { picture, view.scale }; "
+            + "return float4(\(name)(in.position.xy / view.scale, layer, v)); }"
+    }
+    return shaderCommon + file + text + "\n" + file + entry + "\n"
+}
+
+/// Whether a shader file's function, named as the file, takes a `Layer`, so it goes on the picture, or else a color.
+func shaderKind(_ text: String, name: String) -> ShaderKind {
+    guard let signature = text.range(of: "\\b\(name)\\s*\\([^)]*\\)", options: .regularExpression) else { return .color }
+    return text[signature].range(of: "\\bLayer\\b", options: .regularExpression) == nil ? .color : .layer
+}

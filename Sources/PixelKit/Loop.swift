@@ -21,6 +21,7 @@ import PixelKitProtocol
         Sound.mixer.prepare() // so the first sounds don't wait for the audio engine
         Sound.readAhead() // in an app, the files of its sounds and objects, in the background, so none is waited for
         Scene.readAhead()
+        screen.compileAhead() // and its shaders
     }
 
     /// Runs the updates that are due at `now`, when the frame will be on the screen, then draws the scene into the canvas
@@ -38,6 +39,7 @@ import PixelKitProtocol
         if assetsCanChange, now - checked >= 0.25 { // 4 times a second, but not in an app, whose files can't change
             checked = now
             screen.reloadChangedAssets()
+            screen.reloadChangedShaders()
             Scene.current.tilemap?.reloadIfChanged()
             Music.restartIfChanged()
             Sound.forgetChanged()

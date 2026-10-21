@@ -6,9 +6,11 @@ import PixelKit
 
 extension ImageName {
     static let appIcon = ImageName("AppIcon")
+    static let canopy = ImageName("canopy")
     static let fireplace = ImageName("fireplace")
     static let house = ImageName("house")
     static let player = ImageName("player")
+    static let swirl = ImageName("swirl")
     static let textbox = ImageName("textbox")
     static let tiles = ImageName("tiles")
     static let tree = ImageName("tree")
@@ -18,15 +20,18 @@ extension ImageName {
 extension MapName {
     static let house = MapName("house")
     static let village = MapName("village")
+    static let wood = MapName("wood")
 }
 
 extension ObjectName {
     static let door = ObjectName("door")
+    static let edge = ObjectName("edge")
     static let entrance = ObjectName("entrance")
     static let fireplace = ObjectName("fireplace")
     static let house = ObjectName("house")
     static let porch = ObjectName("porch")
     static let start = ObjectName("start")
+    static let trail = ObjectName("trail")
     static let tree = ObjectName("tree")
     static let villager = ObjectName("villager")
 }
@@ -35,4 +40,8 @@ extension SoundName {
     static let cut = SoundName("cut")
     static let house = SoundName("house")
     static let village = SoundName("village")
+}
+
+extension ShaderName {
+    static let ripple = ShaderName("ripple")
 }

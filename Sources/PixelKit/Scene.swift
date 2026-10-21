@@ -28,8 +28,30 @@ import Synchronization
     public var darkness = 0.0
     /// The color of the dark, 0xRRGGBB, which multiplies what it darkens: black (the default), or a night's deep blue.
     public var darknessColor: UInt32 = 0x000000
+    /// How much of the world's color is drained, from 0, none (the default), to 1, all gray: a memory, a curse.
+    public var gray = 0.0
+    /// Cloud shadows drifting over the world, shading its daylight; nil, the default, has none.
+    public var clouds: Clouds?
+    /// Fog over the world, above the entities and under the overhangs, lit as the ground is; nil, the default, has none.
+    public var fog: Fog?
+    /// How much darker the light gets toward the view's corners, from 0, not at all (the default), to 1: a wood's gloom.
+    public var vignette = 0.0
+    /// Images behind the map, like a sky or far hills, first to last, each moving at its own rate as the camera moves.
+    public var backdrops: [Parallax] = []
+    /// Images over the world and its fog, under what's drawn after `super.draw`, like a canopy of leaves hanging over the
+    /// view, first to last.
+    public var overhangs: [Parallax] = []
+    /// The game's layer shaders, from `Assets/Shaders`, run on the picture in turn after the world and its overhangs and
+    /// before what's drawn after `super.draw`: a ripple, a heat haze, a wobble. Each draws once it has compiled.
+    public var effects: [Shader] = []
+    var clock = 0.0 // seconds the scene has updated, for what moves: clouds, fog, swaying, shaking, shaders
+    var shaking = Shake()
 
     public init() {}
+
+    /// Shakes the view, not what's drawn after `super.draw`: `trauma` from 0 to 1 is added to what's left, and decays
+    /// over about a second, moving the view up to 8 pixels times its square: 0.3 for a thud, 1 for lightning striking.
+    public func shake(_ trauma: Double) { shaking.add(trauma) }
 
     /// Switches to `next` through `color`: this scene stands still while the view fades to the color over the first
     /// half of `duration` seconds, then `next` becomes `current` and updates while it fades back in. It's
@@ -53,11 +75,18 @@ import Synchronization
     /// One update of the game: the current scene's, unless it's standing still for a transition.
     static func tick(_ dt: Double) {
         for entity in current.entities { entity.before = entity.position + entity.remainder } // where `drawnAt` goes on from
-        guard var change = changing else { return current.update(dt) }
+        guard var change = changing else { return current.advance(dt) }
         change.time += dt
         if let next = change.next, change.time >= change.switchTime { (current, change.next) = (next, nil) }
         changing = change.time < change.duration ? change : nil
-        if change.next == nil { current.update(dt) }
+        if change.next == nil { current.advance(dt) }
+    }
+
+    /// An update, and the scene's time and shake with it, whether or not the game calls super.
+    func advance(_ dt: Double) {
+        clock += dt
+        shaking.decay(dt)
+        update(dt)
     }
 
     /// Puts an entity in the scene with its top-left corner at `position`, in world pixels.
@@ -155,27 +184,45 @@ import Synchronization
         tilemap?.time += dt
     }
 
-    /// Call super to draw the tilemap and entities, then draw anything on top (like a HUD) in screen pixels. The
-    /// map's layers above and the entities' parts above draw over the entities, in that order, and then, if the scene
-    /// is dark, its `darkness` over them all, but where `light`s light it.
+    /// Call super to draw the world, then draw anything on top (like a HUD) in screen pixels. The world is its backdrops,
+    /// its tilemap, its entities, the map's layers above and the entities' parts above, in that order, then its fog and
+    /// its overhangs, lit by its light (`darkness` and the entities' `light`s, `clouds`, `vignette` and `gray`), then its
+    /// `effects`. What's drawn after it stays lit.
     open func draw(_ screen: Screen) {
         for entity in entities { entity.place(screen.alpha) }
         if let follow {
             let middle = follow.drawnAt + [Double(follow.hitbox.x + follow.hitbox.width / 2), Double(follow.hitbox.y + follow.hitbox.height / 2)]
             camera = Self.camera(following: middle, view: screen.size, map: tilemap?.size)
         }
-        screen.offset = camera
-        if let tilemap { screen.draw(tilemap, layers: tilemap.layers.indices.filter { !tilemap.above.contains($0) }) }
-        let order = drawOrder
-        for entity in order { entity.draw(screen) }
-        if let tilemap, !tilemap.above.isEmpty { screen.draw(tilemap, layers: tilemap.above.sorted()) }
-        for entity in order { entity.draw(screen, above: true) }
-        if darkness > 0 {
-            let lights = entities.compactMap { entity in
-                entity.light.map { (screen.middle(of: entity), $0.radius(seed: ObjectIdentifier(entity).hashValue), $0.color) }
-            }
-            screen.light(lights, darkness: darkness, color: darknessColor)
+        screen.time = clock - (1 - screen.alpha) * Loop.step // between updates, as the entities are
+        screen.offset = camera + shaking.offset(at: screen.time)
+        screen.light(self, entities.compactMap { entity in
+            entity.light.map { Shine(middle: screen.middle(of: entity) + $0.offset, radius: $0.radius(seed: ObjectIdentifier(entity).hashValue), light: $0) }
+        })
+        func lit(_ lighting: Screen.Lighting, standing entity: Entity? = nil) {
+            screen.lighting = screen.lit ? lighting : .none
+            if let entity { screen.feet = entity.drawnAt + [Double(entity.hitbox.x) + Double(entity.hitbox.width) / 2, Double(entity.hitbox.y + entity.hitbox.height) - 0.5] }
         }
+        lit(.daylight)
+        for backdrop in backdrops { screen.draw(backdrop) }
+        lit(.pixel)
+        if let tilemap { screen.draw(tilemap, layers: tilemap.layers.indices.filter { !tilemap.above.contains($0) }) }
+        let order = drawOrder, standing: Screen.Lighting = ySort ? .standing : .pixel
+        for entity in order {
+            lit(standing, standing: entity)
+            entity.draw(screen)
+        }
+        lit(.open)
+        if let tilemap, !tilemap.above.isEmpty { screen.draw(tilemap, layers: tilemap.above.sorted()) }
+        for entity in order {
+            lit(standing, standing: entity)
+            entity.draw(screen, above: true)
+        }
+        if let fog { screen.draw(fog) }
+        lit(.daylight)
+        for overhang in overhangs { screen.draw(overhang) }
+        screen.lighting = .none
+        screen.apply(effects)
         screen.offset = .zero
     }
 
@@ -288,12 +335,14 @@ struct Change {
     public var parts: [Part] = []
     /// Blocks other entities' `move(_:)`, as solid tiles do: villagers, chests, tree trunks.
     public var solid = false
+    /// Its hitbox stops the light of a `Light` with shadows, as a tileset's opaque tiles do: tree trunks, pillars, a cart.
+    public var opaque = false
     /// The scene it's in, from `Scene.add(_:at:)`.
     public internal(set) weak var scene: Scene?
     /// The map's object it was made from, for its properties. It's set after `init()` runs, so read it in a `lazy var`:
     /// `lazy var speed = object?.double("speed") ?? 40`.
     public var object: Tilemap.Object?
-    /// The light it gives off in a dark scene (`Scene.darkness`), from its middle, like a torch's; nil gives none.
+    /// The light it gives off, from its middle: a torch's in the dark, a gloom's; nil gives none.
     public var light: Light?
     /// How deep a corner can be, in pixels, for `move(_:)` to nudge the entity around it instead of stopping: going
     /// straight left, right, up or down into something that catches no more of its hitbox than that, it slides sideways
@@ -320,11 +369,11 @@ struct Change {
     }
 
     /// Makes an entity from an object placed in a map, as `Scene.addObjects()` does: `init()` runs, then it takes the
-    /// object's place, hitbox and solidity, and its sprites if it has any, and keeps the object in `object`. A subclass
+    /// object's place, hitbox, solidity and opacity, and its sprites if it has any, and keeps the object in `object`. A subclass
     /// that overrides `init()`, or declares no initializers, inherits this.
     public convenience init(_ object: Tilemap.Object) {
         self.init()
-        (self.object, position, hitbox, solid) = (object, object.position, object.hitbox, object.solid)
+        (self.object, position, hitbox, solid, opaque) = (object, object.position, object.hitbox, object.solid, object.opaque)
         if let sprite = object.sprite { self.sprite = sprite }
         if !object.parts.isEmpty { parts = object.parts }
     }
@@ -519,6 +568,11 @@ public struct Sprite: Sendable {
     /// Set it to 1 when something's hit, and lower it in each update for a flash that fades:
     /// `sprite.flash = max(0, sprite.flash - dt * 8)`.
     public var flash = 0.0
+    /// Adds it to what's under it, unlit, so it shines in the dark: fire, magic, sparks, a lightning bolt.
+    public var glows = false
+    /// One of the game's color shaders, from `Assets/Shaders`, that each of its pixels goes through: a shimmer, a pulse,
+    /// a dissolve. It draws plain until the shader has compiled, and if it doesn't.
+    public var shader: Shader?
     var time = 0.0
 
     /// A sprite of one of the game's images: `Sprite(.slime)`.
@@ -530,30 +584,6 @@ public struct Sprite: Sendable {
     /// Starts the named animation. Playing the one that's already running keeps it going, so it's fine every frame.
     public mutating func play(_ animation: String) {
         if animation != self.animation { (self.animation, time) = (animation, 0) }
-    }
-}
-
-/// The light an entity gives off in a dark scene (`Scene.darkness`), from its middle: a torch, a fireplace, a lantern
-/// or a glowing mushroom. Where lights meet, they add up.
-public struct Light: Sendable {
-    /// How far it reaches, in pixels: it's brightest in the middle and fades to nothing there.
-    public var radius: Double
-    /// Its color, 0xRRGGBB: white, or a fire's orange. A darker color is a dimmer light.
-    public var color: UInt32
-    /// How much its radius wavers, from 0, steady, to 1: about 0.1 for a torch.
-    public var flicker: Double
-    var time = 0.0 // advanced by the scene's updates, so a paused game's flames stand still
-
-    public init(radius: Double, color: UInt32 = 0xFFFFFF, flicker: Double = 0) {
-        (self.radius, self.color, self.flicker) = (radius, color, flicker)
-    }
-
-    /// The radius now: smaller by up to `flicker` of it, wavering a few times a second. `seed` sets lights apart, so two
-    /// torches don't flicker as one.
-    func radius(seed: Int) -> Double {
-        let phase = Double(seed % 1000)
-        let wave = (sin(time * 13 + phase) + sin(time * 31 + phase * 2)) / 4 + 0.5 // 0 to 1, two waves that hardly repeat
-        return radius * (1 - flicker * wave)
     }
 }
 
@@ -580,6 +610,8 @@ public struct Tilemap: Sendable {
     public var above: Set<Int> = []
     /// Tile numbers that block movement, in any layer.
     public var solid: Set<Int>
+    /// Tile numbers that stop the light of a `Light` with shadows, in any layer: walls, trunks, rock.
+    public var opaque: Set<Int> = []
     /// What the tileset says of its tiles, for `properties(at:layer:)`.
     var sheet: SheetFile?
     /// Things placed in the level with the map editor's Objects tool, like coins or where the player starts.
@@ -592,8 +624,8 @@ public struct Tilemap: Sendable {
     var time = 0.0 // for animated tiles, advanced by the scene's updates
 
     /// Something placed in the level with the map editor's Objects tool. What it is comes from its definition,
-    /// `Assets/Objects/<name>.object`, if it has one: its sprites, its hitbox, whether it's solid, its class, and its
-    /// properties' defaults.
+    /// `Assets/Objects/<name>.object`, if it has one: its sprites, its hitbox, whether it's solid or opaque, its class,
+    /// and its properties' defaults.
     public struct Object: Properties, Sendable {
         /// What it is, like "coin" or "player", and its definition's file name; `objects(named:)` finds them by it.
         public var name: String
@@ -611,6 +643,8 @@ public struct Tilemap: Sendable {
         public var hitbox: Rect
         /// Blocks solid movers, as `Entity.solid` does.
         public var solid: Bool
+        /// Its hitbox stops the light of a `Light` with shadows, as `Entity.opaque` does.
+        public var opaque: Bool
         /// The game's class it's made as by `Scene.addObjects()`, by name.
         public var `class`: String?
         var size: Size
@@ -632,12 +666,13 @@ public struct Tilemap: Sendable {
             parts = (definition?.parts ?? []).map { .init(playing($0.sprite, $0.animation), offset: [Double($0.x), Double($0.y)], above: $0.above == true) }
             hitbox = definition?.hitbox.map { Rect(x: $0.x, y: $0.y, width: $0.width, height: $0.height) }
                 ?? Rect(x: 0, y: 0, width: size.width, height: size.height)
-            (solid, `class`, self.size) = (definition?.solid ?? false, definition?.class, Size(size.width, size.height))
+            (solid, opaque, `class`, self.size) = (definition?.solid ?? false, definition?.opaque ?? false, definition?.class, Size(size.width, size.height))
         }
     }
 
     /// Loads `<name>.tilemap` from `Assets` or a folder in it, like `Assets/Maps`, made in the tilemap editor. The tile
-    /// size and which tiles are solid come from the tileset's `.json`, and what its objects are from their definitions.
+    /// size and which tiles are solid and opaque come from the tileset's `.json`, and what its objects are from their
+    /// definitions.
     public init(_ map: MapName) { self.init(map.name) }
 
     /// Loads a map named in a string, like a door's `to`.
@@ -664,7 +699,7 @@ public struct Tilemap: Sendable {
         (tileset, tileSize, width, height) = (map.tileset, sheet.frameWidth, map.width, map.height)
         layers = map.layers.map { $0.tiles.map { $0 < 0 ? nil : $0 } }
         above = Set(map.layers.indices.filter { map.layers[$0].above == true })
-        solid = Set(sheet.solid ?? [])
+        (solid, opaque) = (Set(sheet.solid ?? []), Set(sheet.opaque ?? []))
         self.sheet = sheet
         let names = Set((map.objects ?? []).map(\.name)).sorted()
         var definitions: [String: ObjectFile] = [:]

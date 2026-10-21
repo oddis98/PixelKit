@@ -25,6 +25,8 @@ public struct SheetFile: AssetFile, Equatable, Sendable {
     public var animations: [String: Animation]?
     /// Tilesets only: tile numbers that block movement.
     public var solid: [Int]?
+    /// Tilesets only: tile numbers that stop light from a `Light` with shadows, like walls and trunks.
+    public var opaque: [Int]?
     /// Fonts only: the characters the frames show, in order.
     public var characters: String?
     /// Tilesets only: what each tile can say, like water or damage, with their types and defaults, as objects' properties.
@@ -42,10 +44,10 @@ public struct SheetFile: AssetFile, Equatable, Sendable {
         }
     }
 
-    public init(frameWidth: Int, frameHeight: Int, animations: [String: Animation]? = nil, solid: [Int]? = nil, characters: String? = nil,
-                properties: [ObjectFile.Property]? = nil, tiles: [Int: [String: String]]? = nil) {
-        (self.frameWidth, self.frameHeight, self.animations, self.solid, self.characters) = (frameWidth, frameHeight, animations, solid, characters)
-        (self.properties, self.tiles) = (properties, tiles)
+    public init(frameWidth: Int, frameHeight: Int, animations: [String: Animation]? = nil, solid: [Int]? = nil, opaque: [Int]? = nil,
+                characters: String? = nil, properties: [ObjectFile.Property]? = nil, tiles: [Int: [String: String]]? = nil) {
+        (self.frameWidth, self.frameHeight, self.animations, self.solid, self.opaque) = (frameWidth, frameHeight, animations, solid, opaque)
+        (self.characters, self.properties, self.tiles) = (characters, properties, tiles)
     }
 
     /// A tile's properties: its own, over the tileset's defaults.
@@ -116,6 +118,8 @@ public struct ObjectFile: AssetFile, Equatable, Sendable {
     public var hitbox: Hitbox?
     /// Blocks solid movers, as `Entity.solid` does; nil is false.
     public var solid: Bool?
+    /// Its hitbox stops light from a `Light` with shadows, as `Entity.opaque` does; nil is false.
+    public var opaque: Bool?
     /// The game's class it's made as, by name: a `Placeable` entity.
     public var `class`: String?
     /// Settings for the game, in order, each with its type and default. A map's objects can change them.
@@ -164,9 +168,9 @@ public struct ObjectFile: AssetFile, Equatable, Sendable {
     }
 
     public init(sprite: String? = nil, animation: String? = nil, width: Int? = nil, height: Int? = nil, hitbox: Hitbox? = nil, solid: Bool? = nil,
-                class: String? = nil, properties: [Property]? = nil, parts: [Part]? = nil) {
+                opaque: Bool? = nil, class: String? = nil, properties: [Property]? = nil, parts: [Part]? = nil) {
         (self.sprite, self.animation, self.width, self.height, self.hitbox) = (sprite, animation, width, height, hitbox)
-        (self.solid, self.class, self.properties, self.parts) = (solid, `class`, properties, parts)
+        (self.solid, self.opaque, self.class, self.properties, self.parts) = (solid, opaque, `class`, properties, parts)
     }
 }
 
