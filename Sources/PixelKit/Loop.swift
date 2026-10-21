@@ -94,11 +94,17 @@ struct Pace {
 /// Shows the game in its own window, the canvas scaled up by whole numbers, or on iOS, the app's screen, edge to edge.
 /// A display link draws it 60 times a second, rather than the view's own timer, and says when each frame will be on the
 /// screen: the loop counts the time between frames from that, not from when `draw` gets to run, which other work on the
-/// main thread, like a touch handled first, can make a few milliseconds late.
+/// main thread, like a touch handled first, can make a few milliseconds late. On an iPhone or iPad it's a Metal display
+/// link, which brings each frame's drawable: one taken after the frame could leave a launch a frame behind the screen,
+/// every frame waiting about 12 ms for a drawable and showing 17 ms later. The simulator keeps a `CADisplayLink`: the
+/// Metal one drew about 42 frames a second there, unevenly.
 final class GameView: MTKView {
     let loop: Loop
-    private var link: CADisplayLink?
-    private var shows: Double? // when the frame being drawn will be on the screen, from `link`
+    private var link: CADisplayLink? // on the Mac and in the simulator
+    #if os(iOS)
+    private var metalLink: CAMetalDisplayLink? // on an iPhone or iPad
+    #endif
+    private var shows: Double? // when the frame being drawn will be on the screen, from `link` or `metalLink`
 
     init(resolution: Size) {
         let device = MTLCreateSystemDefaultDevice()!
@@ -110,8 +116,16 @@ final class GameView: MTKView {
         colorspace = CGColorSpace(name: CGColorSpace.sRGB) // show asset colors exactly as they are in the PNG
         // Moves come as the window's first responder (`acceptsMouseMovedEvents`); this says when the mouse leaves.
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
-        #else
+        #elseif targetEnvironment(simulator)
         run(CADisplayLink(target: self, selector: #selector(refresh)))
+        #else
+        let link = CAMetalDisplayLink(metalLayer: layer as! CAMetalLayer)
+        link.delegate = self
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 60, preferred: 60)
+        link.add(to: .main, forMode: .common)
+        metalLink = link
+        #endif
+        #if os(iOS)
         // Stopped in the background, where iOS doesn't let an app use the GPU.
         let center = NotificationCenter.default
         center.addObserver(self, selector: #selector(background), name: UIApplication.didEnterBackgroundNotification, object: nil)
@@ -133,8 +147,8 @@ final class GameView: MTKView {
     }
 
     #if os(iOS)
-    @objc private func background() { link?.isPaused = true }
-    @objc private func foreground() { link?.isPaused = false }
+    @objc private func background() { link?.isPaused = true; metalLink?.isPaused = true }
+    @objc private func foreground() { link?.isPaused = false; metalLink?.isPaused = false }
     #else
     /// The display link of the screen the window is on, which follows it to another.
     override func viewDidMoveToWindow() {
@@ -161,26 +175,45 @@ final class GameView: MTKView {
     }
     #endif
 
-    override func draw(_ dirtyRect: CGRect) {
-        // The frame first, then a drawable to show it in, held no longer than it takes to draw into it.
+    override func draw(_ dirtyRect: CGRect) { frame { currentDrawable } }
+
+    /// The frame first, then a drawable to show it in: `link`'s taken now, held no longer than it takes to draw into it,
+    /// or the one `metalLink` brought.
+    private func frame(_ drawable: () -> CAMetalDrawable?) {
         guard let commands = loop.tick(at: shows ?? CACurrentMediaTime()) else { return }
         defer { commands.commit() } // with or without a drawable, for the canvas a dissolve copies
-        guard let drawable = currentDrawable, let window = currentRenderPassDescriptor else { return }
+        guard let drawable = drawable() else { return }
         #if os(iOS)
         if Input.hardware { for case let controls as TouchControls in subviews { controls.shown = false } }
         #endif
+        let window = MTLRenderPassDescriptor()
+        window.colorAttachments[0].texture = drawable.texture
+        (window.colorAttachments[0].loadAction, window.colorAttachments[0].storeAction) = (.clear, .store)
+        window.colorAttachments[0].clearColor = clearColor
+        // The drawable's own size: `metalLink`'s may be from before the screen turned.
+        let size = CGSize(width: drawable.texture.width, height: drawable.texture.height)
         let screen = loop.screen
         screen.begin(commands, window)
         #if os(iOS)
-        screen.encoder.setViewport(fit(screen.size, in: drawableSize))
+        screen.encoder.setViewport(fit(screen.size, in: size))
         #else
-        screen.encoder.setViewport(letterbox(screen.size, in: drawableSize))
+        screen.encoder.setViewport(letterbox(screen.size, in: size))
         #endif
         screen.quad(screen.canvas, x: 0, y: 0, source: Rect(x: 0, y: 0, width: screen.size.width, height: screen.size.height))
         screen.end()
         commands.present(drawable)
     }
 }
+
+#if os(iOS)
+extension GameView: @preconcurrency CAMetalDisplayLinkDelegate {
+    /// A frame for the screen, with the drawable it will show in and when (`metalLink` is on the main run loop).
+    func metalDisplayLink(_ link: CAMetalDisplayLink, needsUpdate update: CAMetalDisplayLink.Update) {
+        shows = update.targetPresentationTimestamp
+        frame { update.drawable }
+    }
+}
+#endif
 
 #if os(macOS)
 /// Runs the game without a window and sends every frame to the editor that launched it, which shows it in its
