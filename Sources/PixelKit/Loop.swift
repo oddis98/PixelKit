@@ -149,6 +149,13 @@ final class GameView: MTKView {
     #if os(iOS)
     @objc private func background() { link?.isPaused = true; metalLink?.isPaused = true }
     @objc private func foreground() { link?.isPaused = false; metalLink?.isPaused = false }
+
+    /// The view gives its layer a new drawable size only as it hands out drawables itself, and `metalLink` takes them from
+    /// the layer: turned sideways, the game was drawn upright and squeezed onto the screen.
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        (layer as! CAMetalLayer).drawableSize = drawableSize
+    }
     #else
     /// The display link of the screen the window is on, which follows it to another.
     override func viewDidMoveToWindow() {
