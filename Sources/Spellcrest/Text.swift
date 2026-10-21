@@ -46,7 +46,7 @@ extension Screen {
         guard let name else { return (builtInFont, .builtIn) }
         let texture = texture(name)
         guard let sheet = sheet(name), let characters = sheet.characters else {
-            if warned.insert("\(name) font").inserted { print("PixelKit: \(name).json has no characters, so the built-in font draws instead") }
+            if warned.insert("\(name) font").inserted { print("Spellcrest: \(name).json has no characters, so the built-in font draws instead") }
             return (builtInFont, .builtIn)
         }
         if let font = fonts[name] { return (texture, font) }

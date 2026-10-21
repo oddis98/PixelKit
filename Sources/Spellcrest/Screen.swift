@@ -1,6 +1,6 @@
 import ImageIO
 import MetalKit
-import PixelKitProtocol
+import SpellcrestProtocol
 import Synchronization
 
 /// The pixel canvas your game draws on. (0, 0) is the top-left pixel.
@@ -84,7 +84,7 @@ import Synchronization
 
         let library: MTLLibrary
         do { library = try device.makeLibrary(source: shaderCommon + shaderEngine + lightShaders, options: nil) } catch {
-            fatalError("PixelKit: its shaders don't compile: \(error)")
+            fatalError("Spellcrest: its shaders don't compile: \(error)")
         }
         self.library = library
         func state(_ fragment: String, rgb: (MTLBlendFactor, MTLBlendFactor), alpha: (MTLBlendFactor, MTLBlendFactor)) -> MTLRenderPipelineState {
@@ -144,7 +144,7 @@ import Synchronization
             if let shown = sheet(sprite.image)?.animations?[name]?.frame(at: sprite.time) {
                 frame = shown
             } else if warned.insert("\(sprite.image) \(name)").inserted {
-                print("PixelKit: \(sprite.image).json has no animation \"\(name)\"")
+                print("Spellcrest: \(sprite.image).json has no animation \"\(name)\"")
             }
         }
         let source = region(frame, self.frame(sprite.image), in: texture)
@@ -250,7 +250,7 @@ import Synchronization
             modified["\(name).png"] = modificationDate(url)
             return texture
         } catch {
-            fatalError("PixelKit: can't load \(url.path): \(error.localizedDescription)")
+            fatalError("Spellcrest: can't load \(url.path): \(error.localizedDescription)")
         }
     }
 
@@ -260,7 +260,7 @@ import Synchronization
         let url = assetURL("\(name).json")
         var sheet: SheetFile?
         if FileManager.default.fileExists(atPath: url.path) {
-            do { sheet = try SheetFile(contentsOf: url) } catch { print("PixelKit: can't read \(url.path): \(error.localizedDescription)") }
+            do { sheet = try SheetFile(contentsOf: url) } catch { print("Spellcrest: can't read \(url.path): \(error.localizedDescription)") }
         }
         sheets[name] = .some(sheet)
         modified["\(name).json"] = modificationDate(url)
@@ -434,7 +434,7 @@ func makeState(_ library: MTLLibrary, _ fragment: String, vertex: String = "spri
         (color.rgbBlendOperation, color.alphaBlendOperation) = operation
     }
     do { return try library.device.makeRenderPipelineState(descriptor: pipeline) } catch {
-        fatalError("PixelKit: can't make the pipeline for \(fragment): \(error)")
+        fatalError("Spellcrest: can't make the pipeline for \(fragment): \(error)")
     }
 }
 
@@ -749,7 +749,7 @@ struct AssetIndex {
             if FileManager.default.fileExists(atPath: url.path, isDirectory: &folder), folder.boolValue { folders.append((url, modificationDate(url))) }
             let name = (path as NSString).lastPathComponent
             if let first = files[name] {
-                if warned.insert(name).inserted { print("PixelKit: Assets has two files called \(name), so it uses \(first.path), not \(path)") }
+                if warned.insert(name).inserted { print("Spellcrest: Assets has two files called \(name), so it uses \(first.path), not \(path)") }
             } else {
                 files[name] = url
             }

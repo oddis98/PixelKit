@@ -1,12 +1,12 @@
 import Foundation
 import Metal
 import Testing
-@testable import PixelKit
+@testable import Spellcrest
 
 @MainActor @Test func changedPNGsReloadAndUnreadableOnesKeepTheOldTexture() throws {
     let examples = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         .deletingLastPathComponent().appending(path: "Examples/Platformer/Assets/Sprites")
-    let folder = FileManager.default.temporaryDirectory.appending(path: "pixelkit-\(UUID())")
+    let folder = FileManager.default.temporaryDirectory.appending(path: "spellcrest-\(UUID())")
     try FileManager.default.createDirectory(at: folder.appending(path: "Assets"), withIntermediateDirectories: true)
     FileManager.default.changeCurrentDirectoryPath(folder.path) // games load Assets/ relative to here
     let file = folder.appending(path: "Assets/a.png")

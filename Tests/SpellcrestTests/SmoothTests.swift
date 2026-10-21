@@ -1,6 +1,6 @@
 import Metal
 import Testing
-@testable import PixelKit
+@testable import Spellcrest
 
 @Test func theCanvasIsDrawnAtTheScreensScale() {
     // In a window, the whole number it's scaled by, so it reaches the screen pixel for pixel.

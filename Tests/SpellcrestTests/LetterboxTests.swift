@@ -1,6 +1,6 @@
 import Metal
 import Testing
-@testable import PixelKit
+@testable import Spellcrest
 
 @Test func canvasScalesByWholeNumbersAndCenters() {
     // 1000x600 fits 320x180 three times (960x540), leaving 20px / 30px bars.

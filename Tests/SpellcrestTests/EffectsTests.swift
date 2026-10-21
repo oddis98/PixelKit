@@ -1,5 +1,5 @@
 import Testing
-@testable import PixelKit
+@testable import Spellcrest
 
 @MainActor @Test func aSpriteFlashesWhiteKeepingItsShape() throws {
     let screen = try canvas(Size(3, 1))

@@ -1,9 +1,9 @@
 import Foundation
 import ImageIO
 import Metal
-import PixelKitProtocol
+import SpellcrestProtocol
 import Testing
-@testable import PixelKit
+@testable import Spellcrest
 
 @MainActor @Test func tilemapFilesLoadWithSolidTilesFromTheTilesetMarkersAndObjects() throws {
     let folder = FileManager.default.temporaryDirectory.appending(path: "tilemap-\(UUID())")

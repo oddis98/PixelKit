@@ -1,5 +1,5 @@
 import Testing
-@testable import PixelKit
+@testable import Spellcrest
 
 @MainActor @Test func entityLandsOnGroundAndStopsFlushAgainstWalls() {
     let scene = Scene()

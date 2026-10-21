@@ -1,7 +1,7 @@
 import Foundation
 import Metal
 import Testing
-@testable import PixelKit
+@testable import Spellcrest
 
 /// A screen whose images are made in code, each its RGBA pixels and its width, one frame.
 @MainActor func screen(_ size: Size, images: [String: (pixels: [UInt32], width: Int)]) throws -> Screen {

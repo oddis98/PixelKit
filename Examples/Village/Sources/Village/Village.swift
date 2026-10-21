@@ -1,4 +1,4 @@
-import PixelKit
+import Spellcrest
 
 @main struct Village: Game {
     func start() -> Scene {

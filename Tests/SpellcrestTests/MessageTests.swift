@@ -1,5 +1,5 @@
 import Foundation
-import PixelKitProtocol
+import SpellcrestProtocol
 import Testing
 
 @Test func messagesSurviveArrivingOneByteAtATime() {

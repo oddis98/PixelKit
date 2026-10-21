@@ -67,7 +67,7 @@ extension Screen {
         shaders[key, default: Compiled()].modified = modified
         guard let text = try? String(contentsOf: url, encoding: .utf8) else {
             shaders[key] = Compiled(modified: modified, compiling: false, failed: true)
-            if warned.insert("\(key.name).metal").inserted { print("PixelKit: Assets has no \(key.name).metal") }
+            if warned.insert("\(key.name).metal").inserted { print("Spellcrest: Assets has no \(key.name).metal") }
             return
         }
         shaders[key]?.compiling = true
@@ -76,7 +76,7 @@ extension Screen {
             var made: Compiled?
             if let library {
                 let blend: (MTLBlendFactor, MTLBlendFactor) = key.kind == .color ? (.sourceAlpha, .oneMinusSourceAlpha) : (.one, .zero)
-                let entry = key.kind == .color ? "pixelkitColor" : "pixelkitLayer"
+                let entry = key.kind == .color ? "spellcrestColor" : "spellcrestLayer"
                 let vertex = key.kind == .color ? "litVertex" : "spriteVertex" // a sprite's lit as the engine's are
                 made = Compiled(state: makeState(library, entry, vertex: vertex, formats: [format], rgb: blend,
                                                  alpha: key.kind == .color ? (.one, .oneMinusSourceAlpha) : (.one, .zero)),
@@ -88,7 +88,7 @@ extension Screen {
                     // Its errors, or that it compiles once more after them, so the editor drops errors printed for an
                     // older save, which may finish compiling after the one that fixed them.
                     if let problem { print(problem.trimmingCharacters(in: .whitespacesAndNewlines)) }
-                    else if self.shaders[key]?.failed == true { print("PixelKit: \(url.path) compiles again") }
+                    else if self.shaders[key]?.failed == true { print("Spellcrest: \(url.path) compiles again") }
                     var compiled = handed.value ?? Compiled()
                     (compiled.modified, compiled.compiling, compiled.failed) = (modified, false, problem != nil)
                     self.shaders[key] = compiled
@@ -146,7 +146,7 @@ func shaderSource(_ text: String, name: String, path: String, kind: ShaderKind) 
     let file = "#line 1 \"\(path.replacingOccurrences(of: "\"", with: "\\\""))\"\n"
     let entry = switch kind {
     case .color:
-        "fragment float4 pixelkitColor(Vertex in [[stage_in]], texture2d<float> t [[texture(0)]], texture2d<float> shadowed [[texture(1)]], "
+        "fragment float4 spellcrestColor(Vertex in [[stage_in]], texture2d<float> t [[texture(0)]], texture2d<float> shadowed [[texture(1)]], "
             + "texture2d<float> open [[texture(2)]], texture2d<float> clouds [[texture(3)]], constant View &view [[buffer(0)]], "
             + "constant Values &values [[buffer(1)]]) { "
             + "if (order(in.position.xy / view.scale) >= in.effects.y) discard_fragment(); constexpr sampler nearest(filter::nearest); "
@@ -155,7 +155,7 @@ func shaderSource(_ text: String, name: String, path: String, kind: ShaderKind) 
             + "float3 rgb = mix(s.rgb, float3(1), saturate(in.effects.x)); if (in.effects.w > 0.5) return float4(rgb * s.a, s.a); "
             + "return float4(lit(rgb, in.effects.z, in.shade, in.position.xy, view, shadowed, open, clouds), s.a); }"
     case .layer:
-        "fragment float4 pixelkitLayer(Vertex in [[stage_in]], texture2d<float> picture [[texture(0)]], constant View &view [[buffer(0)]], "
+        "fragment float4 spellcrestLayer(Vertex in [[stage_in]], texture2d<float> picture [[texture(0)]], constant View &view [[buffer(0)]], "
             + "constant Values &values [[buffer(1)]]) { Values v = values; Layer layer = { picture, view.scale }; "
             + "return float4(\(name)(in.position.xy / view.scale, layer, v)); }"
     }

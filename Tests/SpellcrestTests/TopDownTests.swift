@@ -1,8 +1,8 @@
 import Foundation
 import Metal
-import PixelKitProtocol
+import SpellcrestProtocol
 import Testing
-@testable import PixelKit
+@testable import Spellcrest
 
 @MainActor @Test func withYSortEntitiesDrawByTheirFeetAndTiesAsTheyWereAdded() {
     final class Bird: Entity { override var sortY: Double { .infinity } } // always over the rest

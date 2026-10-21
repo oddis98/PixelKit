@@ -1,7 +1,7 @@
 import Foundation
 
 /// What the editor and a game it runs say to each other. The editor listens on a Unix socket and puts its path in
-/// the game's `PIXELKIT_EDITOR` environment variable; the game connects and sends its frames there instead of
+/// the game's `SPELLCREST_EDITOR` environment variable; the game connects and sends its frames there instead of
 /// opening a window.
 public enum Message: Equatable, Sendable {
     /// Game to editor, every frame: the canvas as BGRA bytes, row by row.
@@ -16,7 +16,7 @@ public enum Message: Equatable, Sendable {
     /// Editor to game: a library with the game's recompiled code, to switch to without restarting.
     case reload(String)
 
-    public static let environmentKey = "PIXELKIT_EDITOR"
+    public static let environmentKey = "SPELLCREST_EDITOR"
 }
 
 extension Message {

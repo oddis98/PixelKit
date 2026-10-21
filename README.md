@@ -1,8 +1,8 @@
-# PixelKit
+# Spellcrest
 
 A Swift engine for 2D pixel art games on the Mac, iPhone and iPad.
 
-Games are Swift packages that depend on PixelKit. They run on macOS 15 or later and iOS 18 or later, and building them needs Xcode or the Swift toolchain (developed with Swift 6.4).
+Games are Swift packages that depend on Spellcrest. They run on macOS 15 or later and iOS 18 or later, and building them needs Xcode or the Swift toolchain (developed with Swift 6.4).
 
 ## Five-minute start
 
@@ -15,15 +15,15 @@ import PackageDescription
 let package = Package(
     name: "Hello",
     platforms: [.macOS(.v15)],
-    dependencies: [.package(url: "https://github.com/oddis98/PixelKit.git", from: "0.1.0")],
-    targets: [.executableTarget(name: "Hello", dependencies: [.product(name: "PixelKit", package: "PixelKit")])]
+    dependencies: [.package(url: "https://github.com/oddis98/Spellcrest.git", from: "0.17.0")],
+    targets: [.executableTarget(name: "Hello", dependencies: [.product(name: "Spellcrest", package: "Spellcrest")])]
 )
 ```
 
 and `Sources/Hello/Hello.swift`:
 
 ```swift
-import PixelKit
+import Spellcrest
 
 @main struct Hello: Game {
     func start() -> Scene { Title() }
@@ -66,4 +66,6 @@ Run one with `cd Examples/Platformer && swift run`.
 
 Before 1.0, a minor version (0.2, 0.3, …) may change the API.
 
-PixelKit is released under the [MIT License](LICENSE).
+Spellcrest was called PixelKit before 0.17.0. A game made with PixelKit moves to it by importing `Spellcrest` instead, and by naming `https://github.com/oddis98/Spellcrest.git` and the product `Spellcrest` in its `Package.swift`; Spellcrest's editor offers to do this as it opens one.
+
+Spellcrest is released under the [MIT License](LICENSE).

@@ -1,5 +1,5 @@
 import Testing
-@testable import PixelKit
+@testable import Spellcrest
 
 /// A scene of `rows` of 8-pixel tiles, "#" solid, with an entity whose 8x8 hitbox is in cell `walker`: its entities[0].
 @MainActor func place(_ rows: [String], walker: SIMD2<Int>) -> Scene {

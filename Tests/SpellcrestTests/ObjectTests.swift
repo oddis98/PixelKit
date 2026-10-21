@@ -1,9 +1,9 @@
 import Foundation
 import Metal
-import PixelKitProtocol
+import SpellcrestProtocol
 import Synchronization
 import Testing
-@testable import PixelKit
+@testable import Spellcrest
 
 @MainActor @Test func assetsAreFoundByNameInTheirFoldersAtTheTopFirstAndWhenAddedOrMoved() throws {
     let game = FileManager.default.temporaryDirectory.appending(path: "assets-\(UUID())")
@@ -108,7 +108,7 @@ final class Stone: Entity {} // not Placeable
         .write(to: assets.appending(path: "level.tilemap"))
 
     let module = Scene.module
-    Scene.module = "PixelKitTests"
+    Scene.module = "SpellcrestTests"
     defer { Scene.module = module }
     let scene = Scene()
     scene.tilemap = Tilemap("level")
@@ -134,7 +134,7 @@ final class Stone: Entity {} // not Placeable
     try ObjectFile(sprite: "bat", hitbox: .init(x: 2, y: 2, width: 4, height: 4), solid: true, class: "Bat",
                    properties: [.init(name: "speed", type: .number, value: "20")]).write(to: assets.appending(path: "Objects/bat.object"))
     let module = Scene.module
-    Scene.module = "PixelKitTests"
+    Scene.module = "SpellcrestTests"
     defer { Scene.module = module }
     let scene = Scene()
     let bat = try #require(scene.add(ObjectName("bat"), at: [24, 8], properties: ["speed": "30"]) as? Bat)

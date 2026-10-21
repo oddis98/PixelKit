@@ -1,7 +1,7 @@
 import AVFoundation
 import Metal
 import Testing
-@testable import PixelKit
+@testable import Spellcrest
 
 /// A folder whose Assets hold a.wav and b.m4a, a tenth of a second of silence each, made the current directory.
 @MainActor func silentTracks() throws -> URL {

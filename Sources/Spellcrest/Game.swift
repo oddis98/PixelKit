@@ -4,9 +4,9 @@ import AppKit
 import UIKit
 #endif
 import GameController
-import PixelKitProtocol
+import SpellcrestProtocol
 
-/// A PixelKit game. Mark your conforming type `@main` and PixelKit opens a window and runs it (on iOS, the app's
+/// A Spellcrest game. Mark your conforming type `@main` and Spellcrest opens a window and runs it (on iOS, the app's
 /// screen, with touch controls over it).
 @MainActor public protocol Game {
     init()
@@ -167,7 +167,7 @@ public extension Game {
 
     /// Where saves are written, in order, off the main thread: writing one took 4 to 7 ms on an iPhone, which a game that
     /// saves every second, like Driftwood, paid in a frame each second.
-    nonisolated static let writes = DispatchQueue(label: "PixelKit saves")
+    nonisolated static let writes = DispatchQueue(label: "Spellcrest saves")
     /// Saves still being written are written before the game quits.
     private static let finishedOnExit: Void = { atexit { Save.writes.sync {} } }()
 
@@ -178,14 +178,14 @@ public extension Game {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         let data: Data
-        do { data = try encoder.encode(value) } catch { return print("PixelKit: can't save \(name): \(error.localizedDescription)") }
+        do { data = try encoder.encode(value) } catch { return print("Spellcrest: can't save \(name): \(error.localizedDescription)") }
         let file = folder.appending(path: "\(name).json")
         writes.async {
             do {
                 try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try data.write(to: file, options: .atomic)
             } catch {
-                print("PixelKit: can't save \(name): \(error.localizedDescription)")
+                print("Spellcrest: can't save \(name): \(error.localizedDescription)")
             }
         }
     }
@@ -199,7 +199,7 @@ public extension Game {
         do {
             return try JSONDecoder().decode(type, from: data)
         } catch {
-            print("PixelKit: \(file.path) no longer reads as \(type), so it's ignored: \(error)")
+            print("Spellcrest: \(file.path) no longer reads as \(type), so it's ignored: \(error)")
             return nil
         }
     }

@@ -25,13 +25,13 @@ import AVFoundation
     /// The sound `name`, read from its file the first time it plays, unless `readAhead` has.
     static func buffer(_ name: String) -> AVAudioPCMBuffer {
         if let sound = read[name] { return sound.buffer }
-        guard let url = soundURL(name) else { fatalError("PixelKit: Assets has no \(name).wav, .m4a, .mp3 or .caf") }
+        guard let url = soundURL(name) else { fatalError("Spellcrest: Assets has no \(name).wav, .m4a, .mp3 or .caf") }
         do {
-            guard let sound = try readSound(url) else { fatalError("PixelKit: can't play \(url.path): it's too long to hold") }
+            guard let sound = try readSound(url) else { fatalError("Spellcrest: can't play \(url.path): it's too long to hold") }
             read[name] = (sound, url, modificationDate(url))
             return sound
         } catch {
-            fatalError("PixelKit: can't play \(url.path): \(error.localizedDescription)")
+            fatalError("Spellcrest: can't play \(url.path): \(error.localizedDescription)")
         }
     }
 
@@ -176,7 +176,7 @@ func voice(_ until: [Double], now: Double, most: Int) -> Voice {
 /// after its fade about as long, each a frame or two missed at every door and every dusk.
 @MainActor public enum Music {
     /// The players' work, in the order it's asked for.
-    nonisolated static let queue = DispatchQueue(label: "PixelKit music")
+    nonisolated static let queue = DispatchQueue(label: "Spellcrest music")
     /// The track's player, and those fading out, used on `queue` only.
     nonisolated(unsafe) static var player: AVAudioPlayer?
     nonisolated(unsafe) static var fading: [ObjectIdentifier: AVAudioPlayer] = [:]
@@ -198,7 +198,7 @@ func voice(_ until: [Double], now: Double, most: Int) -> Voice {
     /// Loops a track named in a string, like one named after a map.
     @_disfavoredOverload public static func play(_ name: String, fade: Double = 0) {
         guard name != track else { return }
-        guard let url = soundURL(name) else { fatalError("PixelKit: Assets has no \(name).wav, .m4a, .mp3 or .caf") }
+        guard let url = soundURL(name) else { fatalError("Spellcrest: Assets has no \(name).wav, .m4a, .mp3 or .caf") }
         start(name, url, fade: fade)
     }
 
@@ -238,7 +238,7 @@ func voice(_ until: [Double], now: Double, most: Int) -> Voice {
             let new: AVAudioPlayer
             do { new = try AVAudioPlayer(contentsOf: url) } catch {
                 if ifReadable { return }
-                fatalError("PixelKit: can't play \(url.path): \(error.localizedDescription)")
+                fatalError("Spellcrest: can't play \(url.path): \(error.localizedDescription)")
             }
             if let old = player, fade > 0 { // it plays on until it's silent
                 old.setVolume(0, fadeDuration: fade)

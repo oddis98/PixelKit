@@ -1,5 +1,5 @@
 import Foundation
-import PixelKitProtocol
+import SpellcrestProtocol
 import Synchronization
 
 /// A level, menu or screen: a tilemap plus the entities in it.
@@ -136,7 +136,7 @@ import Synchronization
         once(name, in: definitionsRead) {
             let url = assetURL("\(name).object")
             do { return try ObjectFile(contentsOf: url) } catch {
-                if warned.insert("\(name).object").inserted { print("PixelKit: can't make \(name) from \(url.path): \(error.localizedDescription)") }
+                if warned.insert("\(name).object").inserted { print("Spellcrest: can't make \(name) from \(url.path): \(error.localizedDescription)") }
                 return nil
             }
         }
@@ -167,8 +167,8 @@ import Synchronization
         let found: AnyClass? = NSClassFromString(name.contains(".") ? name : "\(module).\(name)")
         if let type = found as? any Placeable.Type { return type.init(object) }
         if warned.insert(name).inserted {
-            print(found == nil ? "PixelKit: \(object.name).object names the class \(name), which \(module) doesn't have, so it's an Entity"
-                               : "PixelKit: \(name) isn't Placeable, so \(object.name) is an Entity. Mark it: final class \(name): Entity, Placeable")
+            print(found == nil ? "Spellcrest: \(object.name).object names the class \(name), which \(module) doesn't have, so it's an Entity"
+                               : "Spellcrest: \(name) isn't Placeable, so \(object.name) is an Entity. Mark it: final class \(name): Entity, Placeable")
         }
         return Entity(object)
     }
@@ -686,7 +686,7 @@ public struct Tilemap: Sendable {
                 return map
             }
         } catch {
-            fatalError("PixelKit: can't load \(assetURL("\(name).tilemap").path): \(error.localizedDescription)")
+            fatalError("Spellcrest: can't load \(assetURL("\(name).tilemap").path): \(error.localizedDescription)")
         }
     }
 
@@ -706,7 +706,7 @@ public struct Tilemap: Sendable {
         for name in names {
             let url = assetURL("\(name).object")
             guard FileManager.default.fileExists(atPath: url.path) else { continue }
-            do { definitions[name] = try ObjectFile(contentsOf: url) } catch { print("PixelKit: can't read \(url.path): \(error.localizedDescription)") }
+            do { definitions[name] = try ObjectFile(contentsOf: url) } catch { print("Spellcrest: can't read \(url.path): \(error.localizedDescription)") }
         }
         var frames: [String: Size?] = [:] // each image's frame size, read once
         objects = (map.objects ?? []).map { placed in

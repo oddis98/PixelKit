@@ -1,4 +1,4 @@
-import PixelKit
+import Spellcrest
 
 @main struct Platformer: Game {
     func start() -> Scene { Level() }

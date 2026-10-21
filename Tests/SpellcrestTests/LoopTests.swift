@@ -1,5 +1,5 @@
 import Testing
-@testable import PixelKit
+@testable import Spellcrest
 
 /// The updates each of a run of frames runs, `elapsed` seconds after the one before.
 private func updates(_ elapsed: [Double]) -> [Int] {

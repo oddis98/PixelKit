@@ -1,8 +1,8 @@
 import ImageIO
 import Metal
-import PixelKitProtocol
+import SpellcrestProtocol
 import Testing
-@testable import PixelKit
+@testable import Spellcrest
 
 @Test func textIsSpacedByEachGlyphsWidthWithDigitsAllAsWide() {
     // A, B and ? fill 3 of their 4 columns, "." only its second, and the digit 1 its second while 2 fills 3.

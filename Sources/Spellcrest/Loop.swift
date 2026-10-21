@@ -1,5 +1,5 @@
 import MetalKit
-import PixelKitProtocol
+import SpellcrestProtocol
 
 /// The game loop: fixed 60 Hz updates, then the scene draws into the small canvas.
 @MainActor final class Loop {

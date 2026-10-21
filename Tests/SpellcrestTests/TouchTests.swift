@@ -1,6 +1,6 @@
 import CoreGraphics
 import Testing
-@testable import PixelKit
+@testable import Spellcrest
 
 @Test func touchControlsHoldTheButtonsUnderEachFinger() {
     let layout = TouchLayout(size: CGSize(width: 852, height: 393), left: 59, right: 59, bottom: 21) // an iPhone, landscape

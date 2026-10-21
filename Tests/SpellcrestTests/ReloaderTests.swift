@@ -1,7 +1,7 @@
 import Foundation
 import ObjectiveC
 import Testing
-@testable import PixelKit
+@testable import Spellcrest
 
 // Versions of one class, as a recompiled game would bring them.
 final class OldSlime: Entity {

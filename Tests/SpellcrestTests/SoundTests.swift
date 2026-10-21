@@ -1,6 +1,6 @@
 import AVFoundation
 import Testing
-@testable import PixelKit
+@testable import Spellcrest
 
 @Test func aSoundGoesOnAFreeVoiceThenANewOneThenTheOneNearestItsEnd() {
     #expect(voice([], now: 1, most: 2) == .new)
