@@ -99,6 +99,25 @@ let white2 = (pixels: [UInt32](repeating: 0xFFFF_FFFF, count: 2), width: 2)
     #expect(moved)
 }
 
+@MainActor @Test func cloudsAreSoftOrDitheredAndShadeTheDaylightButNotTheLights() throws {
+    let (sky, row) = (try screen(Size(64, 64), images: ["tiles": white2]), try screen(Size(9, 1), images: ["tiles": white2]))
+    let (scene, lamp) = darkRow(String(repeating: ".", count: 64), light: [0, 0])
+    scene.tilemap?.layers = [[Int?](repeating: 0, count: 64 * 64)]
+    (scene.tilemap!.height, scene.darkness, lamp.light) = (64, 0, nil)
+    scene.clouds = Clouds(cover: 0.5, shade: 0.5, size: 16, smooth: false) // each pixel in shade or not
+    #expect(Set(try render(sky) { scene.draw(sky) }).count == 2)
+    scene.clouds?.smooth = true // and between
+    #expect(Set(try render(sky) { scene.draw(sky) }).count > 10)
+
+    // At dusk, under a cloud that halves the daylight, a light's middle is as bright as without it.
+    let (dusk, fire) = darkRow(".........", light: [4, 0])
+    (dusk.darkness, fire.light) = (0.5, Light(radius: 4))
+    let clear = try render(row) { dusk.draw(row) }.map { Int($0 & 0xFF) }
+    dusk.clouds = Clouds(cover: 1, shade: 0.5)
+    let cloudy = try render(row) { dusk.draw(row) }.map { Int($0 & 0xFF) }
+    #expect(clear[4] == 255 && cloudy[4] == 255 && abs(clear[0] - 128) <= 1 && abs(cloudy[0] - 64) <= 1)
+}
+
 @MainActor @Test func aGlowingSpriteAddsToWhatsUnderItUnlit() throws {
     let screen = try screen(Size(2, 1), images: ["tiles": (pixels: [0xFF40_4040, 0xFF40_4040], width: 2), "spark": ([0xFF00_00FF], 1)])
     let (scene, lamp) = darkRow("..", light: [0, 0])

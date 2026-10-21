@@ -340,7 +340,7 @@ import Synchronization
     func begin(_ commands: MTLCommandBuffer, _ descriptor: MTLRenderPassDescriptor, _ state: MTLRenderPipelineState? = nil) {
         self.commands = commands
         (lit, view) = (false, makeView(origin: .zero, maps: Size(1, 1), ambient: [1, 1, 1]))
-        go(Pass(descriptor: descriptor, usual: state ?? pipeline, grid: Double(scale), size: size, textures: [white, white]))
+        go(Pass(descriptor: descriptor, usual: state ?? pipeline, grid: Double(scale), size: size, textures: [white, white, white]))
     }
 
     /// Ends the pass under way, if it's begun, keeping what it drew, and goes on with `pass`, which begins as the first
@@ -383,10 +383,11 @@ import Synchronization
         open = nil
     }
 
-    /// The `View` the shaders read: the canvas's scale, the view's offset, the light maps' first
-    /// texel's world pixel and their size, the game's size, and the daylight's color.
-    func makeView(origin: Vector, maps: Size, ambient: SIMD3<Float>) -> [Float] {
-        [Float(scale), 0, 0, 0, Float(offset.x), Float(offset.y), Float(origin.x), Float(origin.y),
+    /// The `View` the shaders read: the canvas's scale; whether there are clouds, 1 dithered and 2 smooth, whether fog is
+    /// smooth, and whether there's a vignette; the view's offset, the light maps' first texel's world pixel and their
+    /// size, the game's size, and the daylight's color.
+    func makeView(origin: Vector, maps: Size, ambient: SIMD3<Float>, clouds: Float = 0, fog: Bool = false, vignette: Bool = false) -> [Float] {
+        [Float(scale), clouds, fog ? 1 : 0, vignette ? 1 : 0, Float(offset.x), Float(offset.y), Float(origin.x), Float(origin.y),
          Float(maps.width), Float(maps.height), Float(size.width), Float(size.height), ambient.x, ambient.y, ambient.z, 0]
     }
 
@@ -502,7 +503,9 @@ struct Corner { float4 xyuv; float4 color; float4 effects; float4 more; };
 // How the canvas lies over the world, and the light maps under it (Screen.view).
 struct View {
     float scale;    // the canvas's pixels to each of the game's
-    float unused[3];
+    float clouds;   // 0 none, 1 dithered, 2 smooth, read between the game's pixels
+    float fog;      // 1: its thickness read between the game's pixels
+    float vignette; // 1: the open map's alpha is a vignette
     float2 offset;  // the world pixel at the view's top left: the camera, shaken
     float2 origin;  // the world pixel at the light maps' first texel
     float2 size;    // the light maps' size in texels
@@ -570,6 +573,18 @@ float4 at(texture2d<float> map, float2 world, constant View &view) {
     return map.read(uint2(clamp(world - view.origin, float2(0), view.size - 1)));
 }
 
+// A map at a world pixel between the texels around it, for what's smooth: soft clouds and fog.
+float4 between(texture2d<float> map, float2 world, constant View &view) {
+    constexpr sampler linear(filter::linear, address::clamp_to_edge);
+    return map.sample(linear, (world - view.origin) / view.size, level(0)); // a level of its own, so a vertex function could too
+}
+
+// How much daylight the clouds leave at a world pixel, from their own map: 1 without clouds.
+float cloudy(texture2d<float> clouds, float2 world, constant View &view) {
+    if (view.clouds < 0.5) return 1;
+    return (view.clouds > 1.5 ? between(clouds, world, view) : at(clouds, world, view)).r;
+}
+
 // A color in a light: multiplied by it, and past daylight, 1, going toward the light's own white; its alpha drains it
 // toward gray.
 float3 shine(float3 rgb, float4 light) {
@@ -581,16 +596,21 @@ float3 shine(float3 rgb, float4 light) {
 
 // A canvas pixel's color as the scene's light maps light it, as `mode` says (Screen.Lighting): 0 not at all; 1 by its
 // pixel's light; 2 by its pixel's without shadows; 3 standing, by that times `shade`, the share of the light at its
-// feet that gets through the shadows; 4 by daylight alone. The shadowed map's alpha is how gray, the open one's how
-// much daylight.
-float3 lit(float3 rgb, float mode, float3 shade, float2 pixel, constant View &view, texture2d<float> shadowed, texture2d<float> open) {
+// feet that gets through the shadows; 4 by daylight alone. The shadowed map's alpha is how gray, the open one's the
+// vignette. The clouds have a map of their own, so they can be soft while the light is sharp: the daylight they take,
+// the ambient darkened by the vignette times their shade, comes off the light here, and the cap at daylight left room
+// for it (`capFragment`).
+float3 lit(float3 rgb, float mode, float3 shade, float2 pixel, constant View &view, texture2d<float> shadowed, texture2d<float> open,
+           texture2d<float> clouds) {
     if (mode < 0.5) return rgb;
     float2 world = pixel / view.scale + view.offset;
     float4 here = at(shadowed, world, view);
-    if (mode < 1.5) return shine(rgb, here);
-    float4 sky = at(open, world, view);
-    if (mode > 3.5) return shine(rgb, float4(view.ambient.rgb * sky.a, here.a));
-    return shine(rgb, float4(sky.rgb * (mode > 2.5 ? shade : float3(1)), here.a));
+    float left = cloudy(clouds, world, view);
+    float4 sky = mode > 1.5 || (left < 1 && view.vignette > 0.5) ? at(open, world, view) : float4(1);
+    float3 taken = view.ambient.rgb * sky.a * (1 - left);
+    if (mode < 1.5) return shine(rgb, float4(here.rgb - taken, here.a));
+    if (mode > 3.5) return shine(rgb, float4(view.ambient.rgb * sky.a * left, here.a));
+    return shine(rgb, float4((sky.rgb - taken) * (mode > 2.5 ? shade : float3(1)), here.a));
 }
 
 Vertex corner(uint i, constant Corner *v, constant float2 &size) {
@@ -618,12 +638,12 @@ let shaderEngine = """
 // A sprite, a tile, text or a fill: its texture's pixel times its color, mixed toward white by a flash, dropped in a
 // dissolve's pattern but for the share to keep, and lit as it says.
 fragment float4 spriteFragment(Vertex in [[stage_in]], texture2d<float> t [[texture(0)]], texture2d<float> shadowed [[texture(1)]],
-                               texture2d<float> open [[texture(2)]], constant View &view [[buffer(0)]]) {
+                               texture2d<float> open [[texture(2)]], texture2d<float> clouds [[texture(3)]], constant View &view [[buffer(0)]]) {
     if (order(in.position.xy / view.scale) >= in.effects.y) discard_fragment(); // the game's pixels, at any scale
     constexpr sampler nearest(filter::nearest);
     float4 c = t.sample(nearest, in.uv) * in.color;
     float3 rgb = mix(c.rgb, float3(1), saturate(in.effects.x));
-    return float4(lit(rgb, in.effects.z, in.shade, in.position.xy, view, shadowed, open), c.a);
+    return float4(lit(rgb, in.effects.z, in.shade, in.position.xy, view, shadowed, open, clouds), c.a);
 }
 
 // A sprite that glows, added to what's under it and unlit: fire, magic, sparks.
@@ -644,7 +664,7 @@ fragment float4 smoothFragment(Vertex in [[stage_in]], texture2d<float> t [[text
 // A backdrop or an overhang over the view: its image from effects.xy in the view's pixels, each row swayed up to
 // effects.z pixels by the time, effects.w; repeated across if more.x, down if more.y; lit as more.z says.
 fragment float4 parallaxFragment(Vertex in [[stage_in]], texture2d<float> t [[texture(0)]], texture2d<float> shadowed [[texture(1)]],
-                                 texture2d<float> open [[texture(2)]], constant View &view [[buffer(0)]]) {
+                                 texture2d<float> open [[texture(2)]], texture2d<float> clouds [[texture(3)]], constant View &view [[buffer(0)]]) {
     float2 size = float2(t.get_width(), t.get_height());
     float2 p = in.position.xy / view.scale - in.effects.xy;
     p.x -= sin(in.effects.w * 1.4 + floor(p.y) * 0.11) * in.effects.z;
@@ -652,15 +672,17 @@ fragment float4 parallaxFragment(Vertex in [[stage_in]], texture2d<float> t [[te
     if (in.more.y > 0.5) p.y -= floor(p.y / size.y) * size.y; else if (p.y < 0 || p.y >= size.y) discard_fragment();
     float4 c = t.read(uint2(min(p, size - 1)));
     if (c.a == 0) discard_fragment();
-    return float4(lit(c.rgb, in.more.z, float3(1), in.position.xy, view, shadowed, open), c.a);
+    return float4(lit(c.rgb, in.more.z, float3(1), in.position.xy, view, shadowed, open, clouds), c.a);
 }
 
-// Fog over the world: its color, as thick as its map (texture 0) says at each world pixel, lit as the ground is.
+// Fog over the world: its color, as thick as its map (texture 0) says at each world pixel, or between them if it's
+// smooth, lit as the ground is.
 fragment float4 fogFragment(Vertex in [[stage_in]], texture2d<float> fog [[texture(0)]], texture2d<float> shadowed [[texture(1)]],
-                            texture2d<float> open [[texture(2)]], constant View &view [[buffer(0)]]) {
-    float thick = at(fog, in.position.xy / view.scale + view.offset, view).r;
+                            texture2d<float> open [[texture(2)]], texture2d<float> clouds [[texture(3)]], constant View &view [[buffer(0)]]) {
+    float2 world = in.position.xy / view.scale + view.offset;
+    float thick = (view.fog > 0.5 ? between(fog, world, view) : at(fog, world, view)).r;
     if (thick <= 0) discard_fragment();
-    return float4(lit(in.color.rgb, 1, float3(1), in.position.xy, view, shadowed, open), thick);
+    return float4(lit(in.color.rgb, 1, float3(1), in.position.xy, view, shadowed, open, clouds), thick);
 }
 
 """

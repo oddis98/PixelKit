@@ -44,9 +44,9 @@ public struct Light: Sendable {
     }
 }
 
-/// Cloud shadows drifting over a scene (`Scene.clouds`): noise over the world, blown by the wind, its edges dithered,
-/// that shades the daylight but not the lights, so a fire under a cloud is as bright. Big, they're the shadows of
-/// clouds; small and thick, the sun through leaves.
+/// Cloud shadows drifting over a scene (`Scene.clouds`): noise over the world, blown by the wind, that shades the
+/// daylight but not the lights, so a fire under a cloud is as bright. Big, they're the shadows of clouds; small and
+/// thick, the sun through leaves.
 public struct Clouds: Sendable {
     /// How much of the sky they cover, from 0 to 1.
     public var cover: Double
@@ -56,9 +56,12 @@ public struct Clouds: Sendable {
     public var size: Double
     /// Where they drift, in pixels a second.
     public var wind: Vector
+    /// Whether their edges are soft, shading between the game's pixels (the default), or dithered in the 4×4 pattern,
+    /// each pixel in shade or not, as pixel art is. The light stays sharp either way.
+    public var smooth: Bool
 
-    public init(cover: Double = 0.45, shade: Double = 0.35, size: Double = 80, wind: Vector = [12, 5]) {
-        (self.cover, self.shade, self.size, self.wind) = (cover, shade, size, wind)
+    public init(cover: Double = 0.45, shade: Double = 0.35, size: Double = 80, wind: Vector = [12, 5], smooth: Bool = true) {
+        (self.cover, self.shade, self.size, self.wind, self.smooth) = (cover, shade, size, wind, smooth)
     }
 }
 
@@ -73,9 +76,11 @@ public struct Fog: Sendable {
     public var size: Double
     /// Where it drifts, in pixels a second.
     public var wind: Vector
+    /// Whether it thins out softly, between the game's pixels (the default), or in dithered steps, as pixel art does.
+    public var smooth: Bool
 
-    public init(color: UInt32 = 0x8C8FA6, thickness: Double = 0.5, size: Double = 48, wind: Vector = [6, 2]) {
-        (self.color, self.thickness, self.size, self.wind) = (color, thickness, size, wind)
+    public init(color: UInt32 = 0x8C8FA6, thickness: Double = 0.5, size: Double = 48, wind: Vector = [6, 2], smooth: Bool = true) {
+        (self.color, self.thickness, self.size, self.wind, self.smooth) = (color, thickness, size, wind, smooth)
     }
 }
 
@@ -93,13 +98,14 @@ struct Shine {
 }
 
 /// The light maps, a texel for each world pixel the view shows: the light with shadows, and in its alpha how gray
-/// (`shadowed`); the light without them, and in its alpha how much daylight (`open`); and how thick the fog is.
+/// (`shadowed`); the light without them, and in its alpha the vignette (`open`); how thick the fog is; and how much
+/// daylight the clouds leave, apart from the light, so they can be read between the game's pixels while it's sharp.
 struct LightMaps {
-    let shadowed, open, fog: MTLTexture
+    let shadowed, open, fog, clouds: MTLTexture
 }
 
-/// The light maps' pipelines: a light added or taken away, the cap at daylight, the clouds and the vignette multiplied,
-/// what's opaque into the mask, and the fog's thickness into its map.
+/// The light maps' pipelines: a light added or taken away, the cap at daylight, the vignette multiplied, what's opaque
+/// into the mask, the fog's thickness into its map, and the clouds into theirs.
 struct LightStates {
     let add, take, cap, clouds, vignette, mask, fog: MTLRenderPipelineState
 
@@ -108,7 +114,7 @@ struct LightStates {
         add = makeState(library, "lightFragment", formats: maps, rgb: (.one, .one), alpha: (.one, .one))
         take = makeState(library, "lightFragment", formats: maps, rgb: (.one, .one), alpha: (.one, .one), operation: (.reverseSubtract, .add))
         cap = makeState(library, "capFragment", formats: maps, rgb: (.one, .one), alpha: (.one, .one), operation: (.min, .min))
-        clouds = makeState(library, "cloudFragment", formats: maps, rgb: (.destinationColor, .zero), alpha: (.destinationAlpha, .zero))
+        clouds = makeState(library, "cloudFragment", formats: [.r8Unorm], rgb: (.one, .zero), alpha: (.one, .zero))
         vignette = makeState(library, "vignetteFragment", formats: maps, rgb: (.destinationColor, .zero), alpha: (.destinationAlpha, .zero))
         mask = makeState(library, "maskFragment", formats: [.r8Unorm], rgb: (.one, .zero), alpha: (.one, .zero))
         fog = makeState(library, "fogNoiseFragment", formats: [.r8Unorm], rgb: (.one, .zero), alpha: (.one, .zero))
@@ -119,8 +125,8 @@ extension Screen {
     /// Works out the light the scene's world is drawn in, before it's drawn, if anything lights it: darkness, clouds, fog,
     /// a vignette, gray, or a light that shows (any in the dark or under clouds; by day only one past daylight, taking
     /// light away or graying). It ends the canvas's pass if that's begun, draws what's opaque into the mask if a light
-    /// that shows casts shadows, the two light maps and the fog's, then goes on with the canvas, the maps bound for every
-    /// quad to read as `lighting` says. The maps have a texel for each world pixel the view shows, from `offset` rounded
+    /// that shows casts shadows, the clouds' map, the two light maps and the fog's, then goes on with the canvas, the maps
+    /// bound for every quad to read as `lighting` says. The maps have a texel for each world pixel the view shows, from `offset` rounded
     /// down, so they stay on the ground as the camera moves between pixels, and cost the same at any `scale`.
     func light(_ scene: Scene, _ lights: [Shine]) {
         lit = false
@@ -132,12 +138,13 @@ extension Screen {
             return r > 0 && (dim || b > 1 || b < 0 || shine.light.gray > 0)
                 && m.x + r > 0 && m.y + r > 0 && m.x - r < Double(size.width) && m.y - r < Double(size.height)
         }
-        guard dim || scene.gray > 0 || scene.fog != nil || scene.vignette > 0 || !shown.isEmpty else { return }
+        guard dim || scene.gray > 0 || scene.clouds != nil || scene.fog != nil || scene.vignette > 0 || !shown.isEmpty else { return }
         interrupt()
         var canvas = current!
         let night = tint(scene.darknessColor), lit = 1 - Float(dark)
         let ambient = SIMD3<Float>(night.x, night.y, night.z) + (1 - SIMD3<Float>(night.x, night.y, night.z)) * lit
-        view = makeView(origin: origin, maps: size, ambient: ambient)
+        view = makeView(origin: origin, maps: size, ambient: ambient, clouds: scene.clouds.map { $0.smooth ? 2 : 1 } ?? 0,
+                        fog: scene.fog?.smooth == true, vignette: scene.vignette > 0)
         let maps = mapTextures(size), states = lightStates
         let whole: SIMD4<Float> = [0, 0, Float(size.width), Float(size.height)]
 
@@ -170,21 +177,28 @@ extension Screen {
             end()
         }
 
-        // The light maps: the ambient, shaded by clouds; lights added, capped at daylight; then lights past it added and
-        // those under 0 taken away; then the vignette.
+        // How much daylight the clouds leave, first, for the cap at daylight to read.
+        if let clouds = scene.clouds {
+            let pass = MTLRenderPassDescriptor()
+            pass.colorAttachments[0].texture = maps.clouds
+            pass.colorAttachments[0].loadAction = .dontCare
+            go(Pass(descriptor: pass, usual: states.clouds, size: size))
+            let blown = clouds.wind * time
+            queue(white, whole, color: [Float(blown.x), Float(blown.y), Float(max(clouds.size, 1)), 0],
+                  effects: [Float(clouds.cover), Float(clouds.shade), clouds.smooth ? 1 : 0, 0])
+            end()
+        }
+
+        // The light maps: the ambient; lights added, capped at daylight; then lights past it added and those under 0
+        // taken away; then the vignette.
         let pass = MTLRenderPassDescriptor()
         for (i, texture) in [maps.shadowed, maps.open].enumerated() {
             pass.colorAttachments[i].texture = texture
             pass.colorAttachments[i].loadAction = .clear
-            let gray = i == 0 ? min(max(scene.gray, 0), 1) : 1 // and the open one's daylight
+            let gray = i == 0 ? min(max(scene.gray, 0), 1) : 1 // and the open one's vignette
             pass.colorAttachments[i].clearColor = MTLClearColor(red: Double(ambient.x), green: Double(ambient.y), blue: Double(ambient.z), alpha: gray)
         }
         go(Pass(descriptor: pass, usual: states.add, size: size, textures: [mask ?? white]))
-        if let clouds = scene.clouds {
-            let blown = clouds.wind * time
-            queue(white, whole, color: [Float(blown.x), Float(blown.y), Float(max(clouds.size, 1)), 0],
-                  effects: [Float(clouds.cover), Float(clouds.shade), 0, 0], state: states.clouds)
-        }
         func glow(_ shine: Shine, _ much: Double, gray: Double, state: MTLRenderPipelineState? = nil) {
             let (m, r, light) = (shine.middle - origin, shine.radius, shine.light)
             let color = tint(light.color) * Float(much)
@@ -194,7 +208,7 @@ extension Screen {
                   more: [Float(light.angle), light.image == nil ? 0 : 1, Float(margin), 0], state: state)
         }
         for shine in shown where shine.light.brightness > 0 { glow(shine, min(shine.light.brightness, 1), gray: shine.light.gray) }
-        queue(white, whole, state: states.cap)
+        queue(scene.clouds == nil ? white : maps.clouds, whole, state: states.cap)
         for shine in shown where shine.light.brightness > 1 { glow(shine, shine.light.brightness - 1, gray: 0) }
         for shine in shown where shine.light.brightness <= 0 { glow(shine, -shine.light.brightness, gray: shine.light.gray, state: states.take) }
         if scene.vignette > 0 { queue(white, whole, effects: [Float(min(scene.vignette, 1)), 0, 0, 0], state: states.vignette) }
@@ -207,11 +221,12 @@ extension Screen {
             pass.colorAttachments[0].loadAction = .dontCare
             go(Pass(descriptor: pass, usual: states.fog, size: size))
             let blown = fog.wind * time
-            queue(white, whole, color: [Float(blown.x), Float(blown.y), Float(max(fog.size, 1)), 0], effects: [Float(fog.thickness), Float(time * 0.05), 0, 0])
+            queue(white, whole, color: [Float(blown.x), Float(blown.y), Float(max(fog.size, 1)), 0],
+                  effects: [Float(fog.thickness), Float(time * 0.05), fog.smooth ? 1 : 0, 0])
             end()
         }
 
-        canvas.textures = [maps.shadowed, maps.open]
+        canvas.textures = [maps.shadowed, maps.open, scene.clouds == nil ? white : maps.clouds]
         go(canvas)
         self.lit = true
     }
@@ -230,7 +245,7 @@ extension Screen {
             (texture.usage, texture.storageMode) = ([.renderTarget, .shaderRead], .private)
             return device.makeTexture(descriptor: texture)!
         }
-        maps = LightMaps(shadowed: texture(.rgba16Float), open: texture(.rgba16Float), fog: texture(.r8Unorm))
+        maps = LightMaps(shadowed: texture(.rgba16Float), open: texture(.rgba16Float), fog: texture(.r8Unorm), clouds: texture(.r8Unorm))
         return maps!
     }
 
@@ -291,17 +306,22 @@ fragment Maps lightFragment(Vertex in [[stage_in]], texture2d<float> shape [[tex
     return { float4(light * seen, in.color.a * glow), float4(light, 0) };
 }
 
-// The light capped at daylight (blended with min), so a light no brighter than 1 shows nothing by day.
-fragment Maps capFragment(Vertex in [[stage_in]]) { return { float4(1), float4(1) }; }
+// The light capped at daylight (blended with min), so a light no brighter than 1 shows nothing by day: at 1, and under
+// clouds (texture 0, how much daylight they leave) the daylight they take more, which lighting takes off again (`lit`),
+// so a fire under a cloud is as bright, and the clouds can be read on their own, smooth while the light is sharp.
+fragment Maps capFragment(Vertex in [[stage_in]], texture2d<float> clouds [[texture(0)]], constant View &view [[buffer(0)]]) {
+    float3 cap = 1 + view.ambient.rgb * (view.clouds > 0.5 ? 1 - clouds.read(uint2(in.position.xy)).r : 0);
+    return { float4(cap, 1), float4(cap, 1) };
+}
 
-// Cloud shadows over the daylight (multiplied): fBm noise over world pixels, blown color.xy pixels by the wind, about
-// color.z pixels big, covering effects.x of the sky and darkening by effects.y, their edges dithered.
-fragment Maps cloudFragment(Vertex in [[stage_in]], constant View &view [[buffer(0)]]) {
+// How much daylight cloud shadows leave at each world pixel, into their map: fBm noise over world pixels, blown color.xy
+// pixels by the wind, about color.z pixels big, covering effects.x of the sky and darkening by effects.y, their edges
+// soft (effects.z) or dithered.
+fragment float4 cloudFragment(Vertex in [[stage_in]], constant View &view [[buffer(0)]]) {
     float2 world = floor(in.position.xy) + view.origin;
     float n = fbm((world - in.color.xy) / in.color.z), edge = mix(1.1, -0.1, in.effects.x); // none at 0, all at 1
-    float cloud = step(dither(world), smoothstep(edge - 0.05, edge + 0.05, n));
-    float k = 1 - in.effects.y * cloud;
-    return { float4(k, k, k, 1), float4(k) };
+    float cloud = in.effects.z > 0.5 ? smoothstep(edge - 0.08, edge + 0.08, n) : step(dither(world), smoothstep(edge - 0.05, edge + 0.05, n));
+    return float4(1 - in.effects.y * cloud);
 }
 
 // Darker toward the view's corners (multiplied), by up to effects.x, in dithered steps.
@@ -317,11 +337,11 @@ fragment Maps vignetteFragment(Vertex in [[stage_in]], constant View &view [[buf
 fragment float4 maskFragment(Vertex in [[stage_in]]) { return float4(1); }
 
 // How thick fog is at each world pixel, into its map: fBm noise about color.z pixels big, blown color.xy pixels by the
-// wind and churning by effects.y, up to effects.x thick, in dithered steps.
+// wind and churning by effects.y, up to effects.x thick, smoothly (effects.z) or in dithered steps.
 fragment float4 fogNoiseFragment(Vertex in [[stage_in]], constant View &view [[buffer(0)]]) {
     float2 world = floor(in.position.xy) + view.origin;
     float thick = smoothstep(0.35, 0.85, fbm((world - in.color.xy) / in.color.z + float2(0, in.effects.y))) * in.effects.x;
-    thick = floor(thick * 4 + dither(world)) / 4;
+    if (in.effects.z < 0.5) thick = floor(thick * 4 + dither(world)) / 4;
     return float4(thick);
 }
 
