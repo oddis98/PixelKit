@@ -46,20 +46,28 @@ import SpellcrestProtocol
         }
 
         guard let commands = queue.makeCommandBuffer() else { return nil }
-        if Scene.changing?.style == .dissolve, Scene.changing?.snapped == false { // the canvas still has the last frame
+        if let change = Scene.changing, change.style == .dissolve, !change.snapped {
+            // The scene it leaves, drawn once more as its last update left it, so what that update changed, like a
+            // choice clicked on a title, is what breaks up, not the frame before it.
+            if let old = change.old { draw(old, commands) }
             screen.snap(commands)
             Scene.changing?.snapped = true
+            Scene.changing?.old = nil
         }
-        let scene = Scene.current
+        draw(Scene.current, commands, changing: Scene.changing)
+        return commands
+    }
+
+    /// Draws `scene` into the canvas on `commands`, with the transition under way over it.
+    private func draw(_ scene: Scene, _ commands: MTLCommandBuffer, changing: Change? = nil) {
         let canvas = MTLRenderPassDescriptor()
         canvas.colorAttachments[0].texture = screen.canvas
         canvas.colorAttachments[0].loadAction = .clear
         canvas.colorAttachments[0].clearColor = clearColor(scene.background)
         screen.begin(commands, canvas)
         scene.draw(screen)
-        Scene.changing?.draw(screen, over: scene)
+        changing?.draw(screen, over: scene)
         screen.end()
-        return commands
     }
 
     func update() {
@@ -206,6 +214,12 @@ final class GameView: MTKView {
     override var acceptsFirstResponder: Bool { true }
     override func keyDown(with event: NSEvent) { Input.keys.insert(Int(event.keyCode)) }
     override func keyUp(with event: NSEvent) { Input.keys.remove(Int(event.keyCode)) }
+    /// Shift comes as a change of the modifiers, not as a key going down: held while its own bit is in them.
+    override func flagsChanged(with event: NSEvent) {
+        let key = Int(event.keyCode)
+        guard let bit = Input.shiftBits[key] else { return }
+        if event.modifierFlags.rawValue & bit != 0 { Input.keys.insert(key) } else { Input.keys.remove(key) }
+    }
     override func mouseDown(with event: NSEvent) { point(event, down: true) }
     override func mouseDragged(with event: NSEvent) { point(event, down: true) }
     override func mouseUp(with event: NSEvent) { point(event, down: false) }
@@ -246,7 +260,7 @@ final class GameView: MTKView {
         let screen = loop.screen
         screen.begin(commands, window, screen.smooth)
         #if os(iOS)
-        screen.encoder.setViewport(fit(screen.size, in: size))
+        screen.encoder.setViewport(fit(screen.size, in: size, top: safeAreaInsets.top * size.height / max(bounds.height, 1)))
         #else
         screen.encoder.setViewport(letterbox(screen.size, in: size))
         #endif

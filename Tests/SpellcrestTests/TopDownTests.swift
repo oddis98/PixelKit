@@ -143,3 +143,17 @@ func colors(_ pixels: [UInt32], width: Int) -> [String] {
     let names: [UInt32: Character] = [0xFFFF_0000: "r", 0xFF00_FF00: "g", 0xFF00_00FF: "b", 0xFF00_0000: "."]
     return stride(from: 0, to: pixels.count, by: width).map { String(pixels[$0..<$0 + width].map { names[$0] ?? "?" }) }
 }
+
+@MainActor @Test func theEnginesOwnValuesSaveAndANameSavedAsTextReadsAsOne() throws {
+    struct Spot: Codable, Equatable {
+        var map: MapName, size: Size, door: Rect, music: SoundName, sprite: ImageName, object: ObjectName, shader: ShaderName
+    }
+    let spot = Spot(map: MapName("village"), size: Size(320, 180), door: Rect(x: 1, y: 2, width: 3, height: 4), music: SoundName("theme"),
+                    sprite: ImageName("slime"), object: ObjectName("door"), shader: ShaderName("ripple"))
+    let data = try JSONEncoder().encode(spot)
+    #expect(try JSONDecoder().decode(Spot.self, from: data) == spot)
+    #expect(String(decoding: data, as: UTF8.self).contains(#""map":"village""#)) // a name saves as itself, a plain string
+    struct Before: Codable { var map: String } // as Driftwood saved its map, before
+    struct After: Codable { var map: MapName }
+    #expect(try JSONDecoder().decode(After.self, from: JSONEncoder().encode(Before(map: "house"))).map == MapName("house"))
+}

@@ -2,42 +2,72 @@ import ImageIO
 import Metal
 
 public extension Screen {
-    /// Draws `text` with its top-left corner at (x, y), snapped to whole pixels; `\n` starts a new line. Given a
-    /// `width` in pixels, it wraps: a word that would go past it starts a new line, and a word wider than that breaks.
-    /// `font` is an image cut into glyphs, `Assets/<font>.png`, whose `.json` lists the `characters` they show (draw
-    /// one in the pixel editor), like `font: .pixel`; without it, a built-in 3x5 font draws. Each glyph takes up the
+    /// Draws `text` with its top-left corner at (x, y); `\n` starts a new line. Given a `width` in pixels, it wraps: a
+    /// word that would go past it starts a new line, and a word wider than that breaks. `font` is an image cut into
+    /// glyphs, `Assets/<font>.png`, whose `.json` lists the `characters` they show (draw one in the pixel editor), like
+    /// `font: .font` for `Assets/Sprites/font.png`; without it, a built-in 3x5 font draws. Each glyph takes up the
     /// columns it has pixels in, then 1 pixel of space, and digits all take up the widest one's, so numbers don't shift
-    /// as they count. `color` (0xRRGGBB) tints the glyphs, and white leaves them as they are.
-    @_disfavoredOverload func text(_ text: String, x: Double, y: Double, width: Int? = nil, font: String? = nil, color: UInt32 = 0xFFFFFF) {
+    /// as they count. `color` (0xRRGGBB) tints the glyphs, and white leaves them as they are; `opacity`, from 0 to 1,
+    /// fades them; and each of their pixels is `scale` pixels square, `width` counting those. `align` puts each line at
+    /// the left, the middle or the right of `width`, or without one, of `x`:
+    /// `screen.text(title, x: 160, y: 40, scale: 3, align: .center)`. Where the canvas is drawn bigger than the game, as
+    /// it is on most screens, x and y go to the nearest part of a pixel below them, so what moves between pixels moves
+    /// smoothly; give whole numbers to keep text on the game's pixels.
+    @_disfavoredOverload func text(_ text: String, x: Double, y: Double, width: Int? = nil, font: String? = nil, color: UInt32 = 0xFFFFFF,
+                                   opacity: Double = 1, scale: Int = 1, align: Align = .left) {
         let (texture, font) = self.font(font)
-        for glyph in font.layout(text, width: width) {
-            quad(texture, x: x + Double(glyph.x), y: y + Double(glyph.y), source: region(glyph.index, font.glyph, in: texture), color: color)
+        let scale = max(scale, 1)
+        for glyph in font.layout(text, width: width.map { $0 / scale }, align: align) {
+            let back = width == nil ? Int(Double(glyph.line * scale) * align.share) : 0 // around or up to x
+            quad(texture, x: x + Double(glyph.x * scale - back), y: y + Double(glyph.y * scale), source: region(glyph.index, font.glyph, in: texture),
+                 size: Size(font.glyph.width * scale, font.glyph.height * scale), color: color, opacity: opacity)
         }
     }
 
     /// Draws `text` in one of the game's fonts. (Only the other one leaves `font` out, or calls that leave it out would
     /// match both.)
-    func text(_ text: String, x: Double, y: Double, width: Int? = nil, font: ImageName, color: UInt32 = 0xFFFFFF) {
-        self.text(text, x: x, y: y, width: width, font: font.name, color: color)
+    func text(_ text: String, x: Double, y: Double, width: Int? = nil, font: ImageName, color: UInt32 = 0xFFFFFF, opacity: Double = 1,
+              scale: Int = 1, align: Align = .left) {
+        self.text(text, x: x, y: y, width: width, font: font.name, color: color, opacity: opacity, scale: scale, align: align)
     }
 
-    /// The size of `text` in pixels, wrapped to `width` if you give one, for example to center it:
+    /// The size of `text` in pixels, from its first glyph's first pixel to its last's, wrapped to `width` if you give
+    /// one and at `scale` as `text(_:x:y:width:font:color:opacity:scale:align:)` draws it, for example to center it:
     /// `x: Double(160 - screen.textSize(title).width / 2)`.
-    @_disfavoredOverload func textSize(_ text: String, width: Int? = nil, font: String? = nil) -> Size {
-        self.font(font).1.size(of: text, width: width)
+    @_disfavoredOverload func textSize(_ text: String, width: Int? = nil, font: String? = nil, scale: Int = 1) -> Size {
+        let scale = max(scale, 1), size = self.font(font).1.size(of: text, width: width.map { $0 / scale })
+        return Size(size.width * scale, size.height * scale)
     }
 
     /// The size of `text` in one of the game's fonts.
-    func textSize(_ text: String, width: Int? = nil, font: ImageName) -> Size { textSize(text, width: width, font: font.name) }
+    func textSize(_ text: String, width: Int? = nil, font: ImageName, scale: Int = 1) -> Size {
+        textSize(text, width: width, font: font.name, scale: scale)
+    }
 
-    /// `text` with a `\n` wherever `text(_:x:y:width:)` would wrap it. To type out words a letter at a time, draw
-    /// `wrap(words, width: 200).prefix(letters)`: a word then doesn't jump to the next line halfway through.
-    @_disfavoredOverload func wrap(_ text: String, width: Int, font: String? = nil) -> String {
-        self.font(font).1.lines(text, width: width).joined(separator: "\n")
+    /// `text` with a `\n` wherever `text(_:x:y:width:font:color:opacity:scale:align:)` would wrap it. To type out words a
+    /// letter at a time, draw `typed.prefix(letters)` of `let typed = wrap(words, width: 200)`, counting `letters` up to
+    /// `typed.count`: a word then doesn't jump to the next line halfway through. (A word wider than the box breaks with
+    /// a `\n` of its own, so `typed` can be longer than `words`.)
+    @_disfavoredOverload func wrap(_ text: String, width: Int, font: String? = nil, scale: Int = 1) -> String {
+        self.font(font).1.lines(text, width: width / max(scale, 1)).joined(separator: "\n")
     }
 
     /// `text` wrapped in one of the game's fonts.
-    func wrap(_ text: String, width: Int, font: ImageName) -> String { wrap(text, width: width, font: font.name) }
+    func wrap(_ text: String, width: Int, font: ImageName, scale: Int = 1) -> String { wrap(text, width: width, font: font.name, scale: scale) }
+
+    /// Where `text(_:x:y:width:font:color:opacity:scale:align:)` puts each line: at the left of its `width`, in the
+    /// middle or at the right, or without one, from `x`, around it or up to it.
+    enum Align: Sendable {
+        /// Lines start at the left: at `x`.
+        case left
+        /// Each line in the middle: of `width`, or around `x`.
+        case center
+        /// Lines end at the right: of `width`, or at `x`.
+        case right
+
+        /// How much of a line's width it goes before where it's put: none, half or all of it.
+        var share: Double { self == .left ? 0 : self == .center ? 0.5 : 1 }
+    }
 }
 
 extension Screen {
@@ -103,21 +133,30 @@ struct Font {
         return character.isWhitespace ? nil : characters["?"]
     }
 
-    /// Each glyph of `text`, wrapped to `width` if given, and where its frame goes, relative to the text's top-left corner.
-    func layout(_ text: String, width: Int? = nil) -> [(index: Int, x: Int, y: Int)] {
+    /// Each glyph of `text`, wrapped to `width` if given, and where its frame goes, relative to the text's top-left
+    /// corner, each line put in `width` as `align` says; and how wide the line it's on is, for text put around a point.
+    func layout(_ text: String, width: Int? = nil, align: Screen.Align = .left) -> [(index: Int, x: Int, y: Int, line: Int)] {
         lines(text, width: width).enumerated().flatMap { row, line in
-            var x = 0
-            return line.compactMap { character -> (index: Int, x: Int, y: Int)? in
+            let wide = self.width(of: line)
+            var x = width.map { Int(Double($0 - wide) * align.share) } ?? 0
+            return line.compactMap { character -> (index: Int, x: Int, y: Int, line: Int)? in
                 let (drawn, advance) = place(character)
                 defer { x += advance }
-                return drawn.map { ($0.index, x + $0.x, row * glyph.height) }
+                return drawn.map { ($0.index, x + $0.x, row * glyph.height, wide) }
             }
         }
     }
 
     func size(of text: String, width: Int? = nil) -> Size {
         let lines = lines(text, width: width)
-        return Size(lines.map(advance).max() ?? 0, lines.count * glyph.height)
+        return Size(lines.map { self.width(of: $0) }.max() ?? 0, lines.count * glyph.height)
+    }
+
+    /// How wide `text` draws on a line: how far the pen moves over it, but for the space after its last glyph, so
+    /// text measured with it lines up with what's around it.
+    func width(of text: some StringProtocol) -> Int {
+        guard let last = text.last else { return 0 }
+        return advance(text) - (place(last).glyph == nil ? 0 : 1)
     }
 
     /// The lines `text` draws as: split at `\n`, and given a `width`, at the last space before a word that would go
@@ -128,17 +167,18 @@ struct Font {
         return paragraphs.flatMap { paragraph in
             var lines: [String] = [], line: String?
             for word in paragraph.split(separator: " ", omittingEmptySubsequences: false) {
-                if let current = line, advance(current + " " + word) <= width {
+                if let current = line, self.width(of: current + " " + word) <= width {
                     line = current + " " + word
                     continue
                 }
                 if let line { lines.append(line) }
                 var rest = word
-                while rest.count > 1, advance(rest) > width { // wider than a line: break it where it stops fitting
+                while rest.count > 1, self.width(of: rest) > width { // wider than a line: break it where it stops fitting
                     var (fits, x) = (0, 0)
                     for character in rest {
-                        x += place(character).advance
-                        if x > width { break }
+                        let (drawn, advance) = place(character)
+                        if x + advance - (drawn == nil ? 0 : 1) > width { break }
+                        x += advance
                         fits += 1
                     }
                     lines.append(String(rest.prefix(max(fits, 1))))

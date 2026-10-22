@@ -6,7 +6,9 @@ import MetalKit
 public struct Light: Sendable {
     /// How far it reaches, in pixels: it's brightest in the middle and fades to nothing there.
     public var radius: Double
-    /// Its color, 0xRRGGBB: white, or a fire's orange. A darker color is a dimmer light.
+    /// Its color, 0xRRGGBB: white, or a fire's orange. A darker color is a dimmer light. With `brightness` under 0 it's
+    /// the light taken away: white takes all of it, as a gloom does, and a color takes only that color, so a blue one
+    /// leaves the ground yellower.
     public var color: UInt32
     /// How much its radius wavers, from 0, steady, to 1: about 0.1 for a torch.
     public var flicker: Double
@@ -29,6 +31,8 @@ public struct Light: Sendable {
     public var angle: Double
     var time = 0.0 // advanced by the scene's updates, so a paused game's flames stand still
 
+    /// A light reaching `radius` pixels, white, steady and round unless you say otherwise: a torch is
+    /// `Light(radius: 48, color: 0xFFAA55, flicker: 0.1)`, a gloom `Light(radius: 40, brightness: -1, gray: 1)`.
     public init(radius: Double, color: UInt32 = 0xFFFFFF, flicker: Double = 0, brightness: Double = 1, offset: Vector = .zero, gray: Double = 0,
                 shadows: Bool = false, image: ImageName? = nil, angle: Double = 0) {
         (self.radius, self.color, self.flicker, self.brightness, self.offset) = (radius, color, flicker, brightness, offset)
@@ -60,6 +64,8 @@ public struct Clouds: Sendable {
     /// each pixel in shade or not, as pixel art is. The light stays sharp either way.
     public var smooth: Bool
 
+    /// Clouds covering `cover` of the sky, darkening the daylight under them by `shade`, about `size` pixels across and
+    /// drifting with `wind`: by default a fair day's, `Clouds()`.
     public init(cover: Double = 0.45, shade: Double = 0.35, size: Double = 80, wind: Vector = [12, 5], smooth: Bool = true) {
         (self.cover, self.shade, self.size, self.wind, self.smooth) = (cover, shade, size, wind, smooth)
     }
@@ -79,6 +85,8 @@ public struct Fog: Sendable {
     /// Whether it thins out softly, between the game's pixels (the default), or in dithered steps, as pixel art does.
     public var smooth: Bool
 
+    /// Fog of `color`, `thickness` at its thickest, in wisps about `size` pixels across drifting with `wind`: by default
+    /// a gray mist, `Fog()`.
     public init(color: UInt32 = 0x8C8FA6, thickness: Double = 0.5, size: Double = 48, wind: Vector = [6, 2], smooth: Bool = true) {
         (self.color, self.thickness, self.size, self.wind, self.smooth) = (color, thickness, size, wind, smooth)
     }

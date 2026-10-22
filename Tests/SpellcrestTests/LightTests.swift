@@ -256,3 +256,21 @@ let white2 = (pixels: [UInt32](repeating: 0xFFFF_FFFF, count: 2), width: 2)
     let error = #expect(throws: (any Error).self) { try device.makeLibrary(source: source, options: nil) }
     #expect(error?.localizedDescription.contains("/Game/Assets/Shaders/ripple.metal:2:36: error: use of undeclared identifier 'sinn'") == true)
 }
+
+@MainActor @Test func entitiesAreNumberedAsTheyreAddedSoAFlickerIsTheSameEachRunAndTheShakeSaysHowFar() {
+    func flickers() -> [Double] {
+        let scene = Scene()
+        return (0..<3).map { _ in
+            let torch = Entity()
+            torch.light = Light(radius: 40, flicker: 0.3)
+            torch.light?.time = 0.7
+            scene.add(torch, at: .zero)
+            return torch.light!.radius(seed: torch.number)
+        }
+    }
+    #expect(flickers() == flickers() && Set(flickers()).count == 3) // alike in two scenes made alike, and apart from each other
+    let scene = Scene()
+    #expect(scene.shakeOffset == .zero)
+    scene.shake(1)
+    #expect(scene.shakeOffset != .zero && scene.shakeOffset == scene.shaking.offset(at: scene.clock))
+}

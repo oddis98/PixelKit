@@ -36,3 +36,15 @@ import Testing
     #expect(pixel(at: CGPoint(x: 201, y: 100), in: phone, canvas: canvas) == [160, 79])
     #expect(pixel(at: CGPoint(x: 201, y: 500), in: phone, canvas: canvas).y > 179) // below the game, where the controls are
 }
+
+@Test func uprightTheCanvasGoesBelowTheTopOfTheSafeArea() {
+    // An iPhone upright, 402x874 points with the Dynamic Island in the top 62: the canvas just under it, all of it showing.
+    let canvas = Size(320, 180)
+    let phone = fit(canvas, in: CGSize(width: 402, height: 874), top: 62)
+    #expect([phone.originX, phone.originY, phone.width] == [0, 62, 402])
+    #expect(pixel(at: CGPoint(x: 201, y: 62.5), in: phone, canvas: canvas) == [160, 0]) // a tap just under the island
+    #expect(pixel(at: CGPoint(x: 201, y: 30), in: phone, canvas: canvas).y < 0) // on the island, off the game
+    // Sideways, where the top has no inset of its own, the canvas stays in the middle, as before.
+    let sideways = fit(canvas, in: CGSize(width: 874, height: 402), top: 0)
+    #expect(sideways.originY == 0 && sideways.height == 402)
+}

@@ -46,12 +46,19 @@ import Synchronization
     public var effects: [Shader] = []
     var clock = 0.0 // seconds the scene has updated, for what moves: clouds, fog, swaying, shaking, shaders
     var shaking = Shake()
+    var added = 0 // entities added so far, which numbers each, for its light's flicker
 
+    /// An empty scene, to subclass: set up its map and entities in your `init()`, then call super's.
     public init() {}
 
     /// Shakes the view, not what's drawn after `super.draw`: `trauma` from 0 to 1 is added to what's left, and decays
     /// over about a second, moving the view up to 8 pixels times its square: 0.3 for a thud, 1 for lightning striking.
     public func shake(_ trauma: Double) { shaking.add(trauma) }
+
+    /// How far the shake moves the view now, in pixels: the world is drawn with its top-left corner at `camera` plus
+    /// this. What a game places on the view by `camera`, like a layer shader's position or a HUD over an entity, takes
+    /// it off too to stay with the world as it shakes: `Shader(.ripple, [x - camera.x - shakeOffset.x, …])`.
+    public var shakeOffset: Vector { shaking.offset(at: clock) }
 
     /// Switches to `next` through `color`: this scene stands still while the view fades to the color over the first
     /// half of `duration` seconds, then `next` becomes `current` and updates while it fades back in. It's
@@ -63,10 +70,14 @@ import Synchronization
     /// Switches to `next` over `duration` seconds in a `style`: a fade, a wipe or an iris goes through `color`, this
     /// scene standing still until the color covers the view, halfway, then `next` becoming `current` and updating as
     /// it's uncovered; a dissolve has `next` update from the start, under this scene's last frame as it breaks up. A
-    /// transition covers everything, a HUD too, and pauses with the game. `Scene.current = next` switches at once.
+    /// transition covers everything, a HUD too, and pauses with the game. `Scene.current = next` switches at once. One
+    /// started while another is under way takes its place from as far as the view is covered, so a fade started as
+    /// another uncovers the view darkens it again from there, rather than jumping to all of it showing.
     public static func transition(to next: Scene, duration: Double = 0.5, style: Transition = .fade, color: UInt32 = 0x000000) {
         guard duration > 0 else { return current = next }
-        changing = Change(next: next, duration: duration, style: style, color: color)
+        var change = Change(next: next, duration: duration, style: style, color: color, old: current)
+        if let under = changing, under.style != .dissolve, style != .dissolve { change.time = under.cover * duration / 2 }
+        changing = change
     }
 
     /// The transition under way, if any.
@@ -93,6 +104,8 @@ import Synchronization
     public func add(_ entity: Entity, at position: Vector) {
         entity.position = position
         entity.scene = self
+        entity.number = added
+        added += 1
         entities.append(entity)
     }
 
@@ -125,10 +138,21 @@ import Synchronization
     /// `Entity`, and the console says why, once.
     @_disfavoredOverload @discardableResult
     public func add(_ name: String, at position: Vector, properties: [String: String] = [:]) -> Entity {
-        let placed = TilemapFile.Object(name: name, x: Int(position.x), y: Int(position.y), properties: properties)
-        let entity = Self.make(Tilemap.Object(placed, definition: Self.definition(name), tileSize: tilemap?.tileSize ?? 16, frame: frameSize))
+        let entity = make(name, at: position, properties: properties)
         add(entity, at: position)
         return entity
+    }
+
+    /// Makes the object `name` from its definition as `add(_:at:properties:)` does, as its class, without adding it:
+    /// to read what it would be before it's there, like the sprite of a building the player is about to put down.
+    public func make(_ name: ObjectName, at position: Vector, properties: [String: String] = [:]) -> Entity {
+        make(name.name, at: position, properties: properties)
+    }
+
+    /// The same, with the object named in a string.
+    @_disfavoredOverload public func make(_ name: String, at position: Vector, properties: [String: String] = [:]) -> Entity {
+        let placed = TilemapFile.Object(name: name, x: Int(position.x), y: Int(position.y), properties: properties)
+        return Self.make(Tilemap.Object(placed, definition: Self.definition(name), tileSize: tilemap?.tileSize ?? 16, frame: frameSize))
     }
 
     /// `Assets/Objects/<name>.object`, read `once`; nil if it can't be, which the console says, once.
@@ -197,7 +221,7 @@ import Synchronization
         screen.time = clock - (1 - screen.alpha) * Loop.step // between updates, as the entities are
         screen.offset = camera + shaking.offset(at: screen.time)
         screen.light(self, entities.compactMap { entity in
-            entity.light.map { Shine(middle: screen.middle(of: entity) + $0.offset, radius: $0.radius(seed: ObjectIdentifier(entity).hashValue), light: $0) }
+            entity.light.map { Shine(middle: screen.middle(of: entity) + $0.offset, radius: $0.radius(seed: entity.number), light: $0) }
         })
         func lit(_ lighting: Screen.Lighting, standing entity: Entity? = nil) {
             screen.lighting = screen.lit ? lighting : .none
@@ -256,7 +280,16 @@ public enum Transition: Sendable, Equatable {
     case dissolve
 
     /// Where a wipe comes in.
-    public enum Side: Sendable { case left, right, top, bottom }
+    public enum Side: Sendable {
+        /// From the left edge, going on off the right.
+        case left
+        /// From the right edge, going on off the left.
+        case right
+        /// From the top, going on off the bottom.
+        case top
+        /// From the bottom, going on off the top.
+        case bottom
+    }
 }
 
 /// A switch to another scene under way, from `Scene.transition(to:duration:style:color:)`.
@@ -265,8 +298,9 @@ struct Change {
     let duration: Double
     let style: Transition
     let color: UInt32
+    var old: Scene? // the scene it leaves, which a dissolve draws once more for its copy, then lets go
     var time = 0.0
-    var snapped = false // a dissolve's copy of the last frame, taken as it draws first
+    var snapped = false // a dissolve's copy of the scene it leaves, taken as it draws first
 
     /// When `next` becomes current: once the color covers the view, halfway, or for a dissolve at once.
     var switchTime: Double { style == .dissolve ? 0 : duration / 2 }
@@ -356,7 +390,10 @@ struct Change {
     public var drawnAt: Vector { position + between }
     var between = Vector.zero // from `position` to where it's drawn, worked out by the scene for each frame (`place`)
     var before: Vector? // `position + remainder` as the last update started (`Scene.tick`)
+    var number = 0 // its place among what its scene has added, which sets its light's flicker apart, the same each run
 
+    /// An entity at (0, 0) with a 16×16 hitbox and no sprite, to subclass: set its sprite, hitbox and the rest in your
+    /// `init()`.
     public init() {}
 
     /// Works out where it's drawn in a frame `alpha` of the way from the last update to the next: that far from where it
@@ -369,23 +406,33 @@ struct Change {
     }
 
     /// Makes an entity from an object placed in a map, as `Scene.addObjects()` does: `init()` runs, then it takes the
-    /// object's place, hitbox, solidity and opacity, and its sprites if it has any, and keeps the object in `object`. A subclass
-    /// that overrides `init()`, or declares no initializers, inherits this.
+    /// object's place, hitbox, solidity and opacity, and its sprites if it has any, and keeps the object in `object`. The
+    /// object's sprite keeps what `init()` set on the one it takes the place of that the object editor has no field for:
+    /// whether it glows, its shader, color, opacity and whether it's flipped. A subclass that overrides `init()`, or
+    /// declares no initializers, inherits this.
     public convenience init(_ object: Tilemap.Object) {
         self.init()
         (self.object, position, hitbox, solid, opaque) = (object, object.position, object.hitbox, object.solid, object.opaque)
-        if let sprite = object.sprite { self.sprite = sprite }
+        if var sprite = object.sprite {
+            if let made = self.sprite {
+                (sprite.glows, sprite.shader, sprite.color, sprite.opacity, sprite.flipped) = (made.glows, made.shader, made.color, made.opacity, made.flipped)
+            }
+            self.sprite = sprite
+        }
         if !object.parts.isEmpty { parts = object.parts }
     }
 
     /// A sprite an entity is drawn with besides its `sprite`.
     public struct Part: Sendable {
+        /// What it draws, which animates as the entity's sprite does.
         public var sprite: Sprite
         /// From the entity's `position`, in pixels.
         public var offset: Vector
         /// Draws over every entity, and over the map's layers above them.
         public var above: Bool
 
+        /// A part drawing `sprite` at `offset` from the entity's top-left corner, over everything if it's `above`, like
+        /// a tree's crown.
         public init(_ sprite: Sprite, offset: Vector = .zero, above: Bool = false) { (self.sprite, self.offset, self.above) = (sprite, offset, above) }
     }
 
@@ -413,11 +460,14 @@ struct Change {
 
     /// Moves by `velocity * dt` one pixel at a time, stopping flush against solid tiles and solid entities (but not
     /// those it already overlaps, so two that start on top of each other can walk apart), or with `cornerSlide` sliding
-    /// around their corners. Hitting something zeroes that part of the velocity.
+    /// around their corners. Hitting something zeroes that part of the velocity. Along an axis it has no velocity on,
+    /// it stays where it is, though it stopped part of a pixel into a step.
     public func move(_ dt: Double) {
         let straight = velocity.x == 0 || velocity.y == 0 // only that slides around corners, not a diagonal
         remainder += velocity * dt
-        let pixels = remainder.rounded(.toNearestOrAwayFromZero)
+        var pixels = remainder.rounded(.toNearestOrAwayFromZero)
+        // Standing still, what's left of a pixel would round to one, then back the next update, and on: it waits instead.
+        for axis in 0..<2 where velocity[axis] == 0 { pixels[axis] = 0 }
         remainder -= pixels
         for axis in 0..<2 where !slide(Int(pixels[axis]), axis: axis, aroundCorners: straight) {
             velocity[axis] = 0
@@ -546,6 +596,7 @@ struct Change {
 /// object's sprite, hitbox and properties: `final class Villager: Entity, Placeable`. A class that isn't final makes it
 /// `required` (`required convenience init(_ object: Tilemap.Object) { … }`).
 @MainActor public protocol Placeable: Entity {
+    /// Makes it from an object placed in a map, or made from its definition in code (`Scene.add(_:at:properties:)`).
     init(_ object: Tilemap.Object)
 }
 
@@ -565,8 +616,9 @@ public struct Sprite: Sendable {
     /// From 0, invisible, to 1, the default: for ghosts, or things that fade out.
     public var opacity = 1.0
     /// Mixes the sprite's pixels toward white, keeping its shape: from 0, as they are (the default), to 1, all white.
-    /// Set it to 1 when something's hit, and lower it in each update for a flash that fades:
-    /// `sprite.flash = max(0, sprite.flash - dt * 8)`.
+    /// Set it to 1 when something's hit, and lower it in each update for a flash that fades. On an entity's sprite,
+    /// which is optional, read it first, since writing `sprite` while reading it crashes:
+    /// `if let flash = sprite?.flash { sprite?.flash = max(0, flash - dt * 8) }`.
     public var flash = 0.0
     /// Adds it to what's under it, unlit, so it shines in the dark: fire, magic, sparks, a lightning bolt.
     public var glows = false
@@ -594,9 +646,10 @@ let mapsLoaded = Mutex<[String: Tilemap]>([:])
 /// A grid of tiles from a tileset, `<tileset>.png` in `Assets` or a folder in it, cut into `tileSize` squares numbered
 /// left to right, then top to bottom.
 ///
-/// While the game runs, the scene's tilemap reloads when its `.tilemap` (or the tileset's `.json`, or one of its
-/// objects' definitions) changes, so tiles painted in the editor show up live. Entities already in the scene stay as
-/// they are: objects moved or added in the editor show up the next time the game builds the level.
+/// While the game runs from the editor or with `swift run`, the current scene's tilemap reloads when its `.tilemap`
+/// (or the tileset's `.json`, or one of its objects' definitions) changes, so tiles painted in the editor show up live;
+/// in an app, whose files can't change, it doesn't. Entities already in the scene stay as they are: objects moved or
+/// added in the editor show up the next time the game builds the level.
 public struct Tilemap: Sendable {
     /// The tileset image's name in Assets, without ".png".
     public var tileset: String
@@ -616,6 +669,7 @@ public struct Tilemap: Sendable {
     var sheet: SheetFile?
     /// Things placed in the level with the map editor's Objects tool, like coins or where the player starts.
     public var objects: [Object] = []
+    var names: [String] = [] // each layer's, as the map editor named it
     var name: String? // the .tilemap it came from
     var watched: [String] = [] // it, the tileset's .json and its objects' definitions
     var modified: [Date?] = [] // when each was last changed, as loaded
@@ -641,7 +695,7 @@ public struct Tilemap: Sendable {
         public var parts: [Entity.Part]
         /// The part that collides, from its top-left corner: its definition's, or all of it.
         public var hitbox: Rect
-        /// Blocks solid movers, as `Entity.solid` does.
+        /// Blocks other entities as they move, as `Entity.solid` does.
         public var solid: Bool
         /// Its hitbox stops the light of a `Light` with shadows, as `Entity.opaque` does.
         public var opaque: Bool
@@ -675,7 +729,8 @@ public struct Tilemap: Sendable {
     /// definitions.
     public init(_ map: MapName) { self.init(map.name) }
 
-    /// Loads a map named in a string, like a door's `to`.
+    /// Loads a map named in a string, like a door's `to`. One that's missing or can't be read is empty, and the console
+    /// says why, once, so the game goes on; where files can change, it loads once its file is there.
     @_disfavoredOverload public init(_ name: String) {
         // `once`: in an app, going back to a map, like the island from a house, reads nothing again (25 to 39 ms on an
         // iPhone for Driftwood's island).
@@ -686,18 +741,23 @@ public struct Tilemap: Sendable {
                 return map
             }
         } catch {
-            fatalError("Spellcrest: can't load \(assetURL("\(name).tilemap").path): \(error.localizedDescription)")
+            say(once: "\(name).tilemap", "Spellcrest: can't load \(assetURL("\(name).tilemap").path), so it's empty: \(error.localizedDescription)")
+            self = Tilemap()
+            self.name = name
+            watched = ["\(name).tilemap"]
+            modified = [modificationDate(assetURL("\(name).tilemap"))]
         }
     }
 
-    /// An empty map, for `load` to fill.
-    private init() { (tileset, tileSize, width, height, layers, solid) = ("", 0, 0, 0, [], []) }
+    /// An empty map, for `load` to fill. Its tiles are a size, so working out a cell never divides by nothing.
+    private init() { (tileset, tileSize, width, height, layers, solid) = ("", 16, 0, 0, [], []) }
 
     mutating func load(_ name: String) throws {
         let map = try TilemapFile(contentsOf: assetURL("\(name).tilemap"))
         let sheet = try SheetFile(contentsOf: assetURL("\(map.tileset).json"))
         (tileset, tileSize, width, height) = (map.tileset, sheet.frameWidth, map.width, map.height)
         layers = map.layers.map { $0.tiles.map { $0 < 0 ? nil : $0 } }
+        names = map.layers.map(\.name)
         above = Set(map.layers.indices.filter { map.layers[$0].above == true })
         (solid, opaque) = (Set(sheet.solid ?? []), Set(sheet.opaque ?? []))
         self.sheet = sheet
@@ -735,7 +795,8 @@ public struct Tilemap: Sendable {
     }
 
     /// Builds a one-layer map from text, one string per row. `legend` maps characters to tile numbers;
-    /// any other character is empty. Every tile in the legend is solid unless you pass `solid`.
+    /// any other character is empty. Every tile in the legend is solid unless you pass `solid`. The tileset's `.json`,
+    /// if it has one, gives its tiles' properties and which are opaque, as it does a map's from a file.
     public init(_ tileset: ImageName, tileSize: Int, rows: [String], legend: [Character: Int], solid: Set<Int>? = nil) {
         self.init(tileset.name, tileSize: tileSize, rows: rows, legend: legend, solid: solid)
     }
@@ -746,10 +807,19 @@ public struct Tilemap: Sendable {
         (self.tileset, self.tileSize, self.width, height) = (tileset, tileSize, width, rows.count)
         layers = [rows.flatMap { row in row.map { legend[$0] } + Array(repeating: nil, count: width - row.count) }]
         self.solid = solid ?? Set(legend.values)
+        let url = assetURL("\(tileset).json")
+        if FileManager.default.fileExists(atPath: url.path) {
+            do { sheet = try SheetFile(contentsOf: url) } catch { print("Spellcrest: can't read \(url.path): \(error.localizedDescription)") }
+        }
+        opaque = Set(sheet?.opaque ?? [])
     }
 
     /// Size in pixels.
     public var size: Size { Size(width * tileSize, height * tileSize) }
+
+    /// The number of the layer the map editor named `name`, for `tile(at:layer:)` and the rest: so a game finds its
+    /// paths' layer however many are added under it. Nil when there's none, as in a map made in code.
+    public func layer(named name: String) -> Int? { names.firstIndex(of: name) }
 
     /// The tile at world pixel `point` in `layer`, or nil for an empty cell or outside the map: what's under the
     /// player's feet, or in front of them.
@@ -767,6 +837,7 @@ public struct Tilemap: Sendable {
 
     /// A tile's properties, from `properties(at:layer:)`.
     public struct TileProperties: Properties, Sendable {
+        /// The tile's values over its tileset's defaults, by name, as text; `bool(_:)` and the others read them.
         public let properties: [String: String]
     }
 
@@ -912,12 +983,19 @@ public struct Tilemap: Sendable {
 /// `Tilemap(_:)` takes. Each is nil (false for `bool`, empty for `list`) when there's none, when it isn't of its type,
 /// or when it's empty, as a popup's None over a default is.
 public protocol Properties {
+    /// Every property by name, as the text it's kept as, "40" or "#FF004D": what the readers below read.
     var properties: [String: String] { get }
 }
 
 public extension Properties {
     /// A number, like "speed": "40".
     func double(_ name: String) -> Double? { value(name) }
+
+    /// A whole number, like "hits": "3"; nil for one with a fraction, like "2.5".
+    func int(_ name: String) -> Int? { value(name) }
+
+    /// Text, as it was typed, like "tier": "stone".
+    func text(_ name: String) -> String? { properties[name].flatMap { $0.isEmpty ? nil : $0 } }
 
     /// A toggle, "true" or "false"; false if there's none.
     func bool(_ name: String) -> Bool { properties[name] == "true" }
@@ -952,25 +1030,38 @@ public extension Properties {
 /// What a property's text can be read as, for `Properties.list(_:of:)`: text, numbers, toggles, colors, points and the
 /// game's asset names.
 public protocol PropertyValue {
+    /// The value a property's text is, or nil when it isn't one: "40" is a `Double`, "chest" isn't.
     init?(property text: String)
 }
 
+/// Text, as it is.
 extension String: PropertyValue {
+    /// The text itself.
     public init?(property text: String) { self = text }
 }
 
+/// A number, "40" or "2.5".
 extension Double: PropertyValue {
+    /// The number the text is; nil for anything else.
     public init?(property text: String) { self.init(text) }
 }
 
+/// A whole number, "3".
 extension Int: PropertyValue {
-    public init?(property text: String) { self.init(text) }
+    /// The whole number the text is, "3" or "3.0"; nil for one with a fraction, like "2.5", or anything else.
+    public init?(property text: String) {
+        guard let number = Double(text).flatMap({ Int(exactly: $0) }) else { return nil }
+        self = number
+    }
 }
 
+/// A toggle, "true" or "false".
 extension Bool: PropertyValue {
+    /// True for "true", false for "false", and nil for anything else.
     public init?(property text: String) { self.init(text) }
 }
 
+/// A color, as 0xRRGGBB.
 extension UInt32: PropertyValue {
     /// A color, "#FF004D", or a whole number.
     public init?(property text: String) {
@@ -978,6 +1069,7 @@ extension UInt32: PropertyValue {
     }
 }
 
+/// A point, a `Vector`.
 extension SIMD2: PropertyValue where Scalar == Double {
     /// A point, "12,34".
     public init?(property text: String) {
@@ -988,17 +1080,21 @@ extension SIMD2: PropertyValue where Scalar == Double {
 }
 
 extension ImageName: PropertyValue {
+    /// The image the text names; nil when it's empty.
     public init?(property text: String) { if text.isEmpty { return nil } else { self.init(text) } }
 }
 
 extension MapName: PropertyValue {
+    /// The map the text names; nil when it's empty.
     public init?(property text: String) { if text.isEmpty { return nil } else { self.init(text) } }
 }
 
 extension ObjectName: PropertyValue {
+    /// The object the text names; nil when it's empty.
     public init?(property text: String) { if text.isEmpty { return nil } else { self.init(text) } }
 }
 
 extension SoundName: PropertyValue {
+    /// The sound the text names; nil when it's empty.
     public init?(property text: String) { if text.isEmpty { return nil } else { self.init(text) } }
 }

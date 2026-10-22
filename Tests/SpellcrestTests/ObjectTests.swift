@@ -164,7 +164,7 @@ extension ObjectName { static let door = ObjectName("door") }
     Music.volume = 0
     defer { Music.stop(); Music.volume = 1 }
     Music.play(.a, fade: 0)
-    #expect(Music.track == "a" && musicPlayer()?.url?.lastPathComponent == "a.wav")
+    #expect(Music.track == .a && musicPlayer()?.url?.lastPathComponent == "a.wav")
     Sound.read = [:] // what other tests' folders had of the same name
     Sound.play(.b, volume: 0)
     #expect(Sound.read["b"]?.url.lastPathComponent == "b.m4a")
@@ -199,6 +199,8 @@ extension ObjectName { static let door = ObjectName("door") }
     #expect(door.sprite("icon") == ImageName("key") && door.sound("step") == SoundName("creak") && door.map("nothing") == nil)
     #expect(door.list("words", of: String.self) == ["Hello!", "Bye"] && door.list("path", of: Vector.self) == [[0, 0], [16, 8]])
     #expect(door.list("tint", of: UInt32.self) == [0xFF004D] && door.list("speed", of: Int.self) == [40] && door.list("at", of: ObjectName.self).isEmpty)
+    #expect(door.int("speed") == 40 && door.int("target") == nil && door.text("icon") == "key" && door.text("at") == nil && door.text("none") == nil)
+    #expect(Int(property: "3.0") == 3 && Int(property: "2.5") == nil && Int(property: "three") == nil) // whole numbers, as `int` reads them
 }
 
 @MainActor @Test func tilesHaveTheirTilesetsPropertiesOverItsDefaults() throws {
@@ -248,4 +250,47 @@ extension ObjectName { static let door = ObjectName("door") }
     let tiles = SheetFile(frameWidth: 8, frameHeight: 8, properties: [.init(name: "water", type: .toggle)], tiles: [3: ["water": "true"]])
     #expect(try String(decoding: JSONEncoder().encode(tiles), as: UTF8.self).contains(#""tiles":{"3":{"water":"true"}}"#))
     #expect(try JSONDecoder().decode(SheetFile.self, from: JSONEncoder().encode(tiles)) == tiles)
+}
+
+final class Lantern: Entity, Placeable {
+    override init() {
+        super.init()
+        var own = Sprite("own")
+        (own.glows, own.shader, own.opacity, own.color) = (true, Shader("shimmer", [0.5]), 0.8, 0xFFCC88)
+        sprite = own
+    }
+}
+
+@MainActor @Test func objectsAreMadeWithoutBeingAddedAndKeepTheLooksTheirClassGivesTheirSprite() throws {
+    let assets = FileManager.default.temporaryDirectory.appending(path: "looks-\(UUID())/Assets")
+    try FileManager.default.createDirectory(at: assets.appending(path: "Objects"), withIntermediateDirectories: true)
+    FileManager.default.changeCurrentDirectoryPath(assets.deletingLastPathComponent().path) // games load Assets/ relative to here
+    try ObjectFile(sprite: "lantern", class: "Lantern").write(to: assets.appending(path: "Objects/lantern.object"))
+    try ObjectFile(sprite: "bat", class: "Bat").write(to: assets.appending(path: "Objects/bat.object"))
+    let module = Scene.module
+    Scene.module = "SpellcrestTests"
+    defer { Scene.module = module }
+    let scene = Scene()
+    // Made, not added: what it would be before it's there, like the building a kit puts down.
+    let ghost = scene.make(ObjectName("bat"), at: [8, 8])
+    #expect(ghost is Bat && ghost.sprite?.image == "bat" && ghost.position == [8, 8] && ghost.scene == nil && scene.entities.isEmpty)
+    // The object's sprite takes the place of its class's, keeping what the object editor has no field for.
+    let lantern = scene.add(ObjectName("lantern"), at: .zero)
+    #expect(lantern.sprite?.image == "lantern" && lantern.sprite?.glows == true && lantern.sprite?.shader == Shader("shimmer", [0.5]))
+    #expect(lantern.sprite?.opacity == 0.8 && lantern.sprite?.color == 0xFFCC88)
+}
+
+@MainActor @Test func aGamesOwnFilesAreFoundByNameAndAMissingImageMapOrSoundGoesOnWithoutIt() throws {
+    let assets = FileManager.default.temporaryDirectory.appending(path: "own-\(UUID())/Assets")
+    try FileManager.default.createDirectory(at: assets.appending(path: "Data"), withIntermediateDirectories: true)
+    FileManager.default.changeCurrentDirectoryPath(assets.deletingLastPathComponent().path) // games load Assets/ relative to here
+    try "stone\nreed".write(to: assets.appending(path: "Data/words.txt"), atomically: true, encoding: .utf8)
+    #expect(Assets.url("words.txt")?.lastPathComponent == "words.txt" && Assets.url("none.txt") == nil)
+    // Missing, an image draws nothing, a map is empty and a sound is silent, each said once, and the game goes on.
+    let screen = try canvas(Size(2, 2))
+    #expect(colors(try render(screen) { screen.draw("ghost", x: 0, y: 0) }, width: 2) == ["..", ".."] && screen.missing.contains("ghost"))
+    let map = Tilemap("nowhere")
+    #expect(map.layers.isEmpty && map.size == Size(0, 0) && !map.isSolid(Rect(x: 0, y: 0, width: 8, height: 8)))
+    Sound.play("silence")
+    #expect(said.withLock { $0.contains("nowhere.tilemap") && $0.contains("silence sound") })
 }

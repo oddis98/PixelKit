@@ -9,6 +9,7 @@ import SpellcrestProtocol
 /// A Spellcrest game. Mark your conforming type `@main` and Spellcrest opens a window and runs it (on iOS, the app's
 /// screen, with touch controls over it).
 @MainActor public protocol Game {
+    /// Makes the game as it starts, before its first scene: a struct with nothing to set needs no `init` of its own.
     init()
     /// Size of the pixel canvas. The window scales it up by whole numbers so pixels stay square and crisp.
     var resolution: Size { get }
@@ -19,20 +20,33 @@ import SpellcrestProtocol
 /// A position or velocity in pixels.
 public typealias Vector = SIMD2<Double>
 
-/// A width and height in pixels, like a game's `resolution`.
-public struct Size: Sendable, Equatable {
-    public var width, height: Int
+/// A width and height in pixels, like a game's `resolution`. It's `Codable`, so a save can keep one.
+public struct Size: Sendable, Equatable, Codable {
+    /// Across, in pixels.
+    public var width: Int
+    /// Down, in pixels.
+    public var height: Int
 
+    /// A size `width` pixels across and `height` down: `Size(320, 180)`.
     public init(_ width: Int, _ height: Int) {
         self.width = width
         self.height = height
     }
 }
 
-/// A rectangle in pixels: its top-left corner and its size, like an entity's `hitbox`.
-public struct Rect: Sendable, Equatable {
-    public var x, y, width, height: Int
+/// A rectangle in pixels: its top-left corner and its size, like an entity's `hitbox`. It's `Codable`, so a save can
+/// keep one.
+public struct Rect: Sendable, Equatable, Codable {
+    /// Its left edge, in pixels.
+    public var x: Int
+    /// Its top edge, in pixels, y going down.
+    public var y: Int
+    /// Across, in pixels.
+    public var width: Int
+    /// Down, in pixels.
+    public var height: Int
 
+    /// The rectangle with its top-left corner at (`x`, `y`), `width` pixels across and `height` down.
     public init(x: Int, y: Int, width: Int, height: Int) {
         (self.x, self.y, self.width, self.height) = (x, y, width, height)
     }
@@ -49,41 +63,88 @@ public struct Rect: Sendable, Equatable {
 }
 
 /// An image in the game's `Assets`, by its file's name without ".png": a sprite, a tileset, a font or a text box. The
-/// editor names each of the game's images, maps, sounds and objects in `Sources/<Game>/AssetNames.swift`, as Xcode
-/// does an asset catalog's, so `Sprite(.slime)` completes, and a typo, or an asset renamed or deleted, is an error
-/// where it's used rather than a crash when the game gets there. `ImageName(name)` names one that comes from data.
-public struct ImageName: Hashable, Sendable {
+/// editor names each of the game's images, maps, sounds, objects and shaders in `Sources/<Game>/AssetNames.swift`, as
+/// Xcode does an asset catalog's, so `Sprite(.slime)` completes, and a typo, or an asset renamed or deleted, is an
+/// error where it's used rather than a crash when the game gets there. `ImageName(name)` names one that comes from
+/// data. It's `Codable`, saved as its name, so a save that kept the name as a `String` reads as one.
+public struct ImageName: Hashable, Sendable, Codable {
+    /// The file's name, without ".png".
     public let name: String
+    /// The image called `name`, for one that comes from data; the names file has a `static let` for each of the game's.
     public init(_ name: String) { self.name = name }
+    /// Reads one saved as its name.
+    public init(from decoder: Decoder) throws { name = try decoder.singleValueContainer().decode(String.self) }
+    /// Saves it as its name.
+    public func encode(to encoder: Encoder) throws { try save(name, to: encoder) }
 }
 
-/// A level in the game's `Assets`, by its `.tilemap` file's name: `Tilemap(.level1)`. See `ImageName`.
-public struct MapName: Hashable, Sendable {
+/// A level in the game's `Assets`, by its `.tilemap` file's name: `Tilemap(.level1)`. See `ImageName`, which says how
+/// it's saved too.
+public struct MapName: Hashable, Sendable, Codable {
+    /// The file's name, without ".tilemap".
     public let name: String
+    /// The map called `name`, for one that comes from data, like a door's `to`.
     public init(_ name: String) { self.name = name }
+    /// Reads one saved as its name.
+    public init(from decoder: Decoder) throws { name = try decoder.singleValueContainer().decode(String.self) }
+    /// Saves it as its name.
+    public func encode(to encoder: Encoder) throws { try save(name, to: encoder) }
 }
 
 /// A sound effect or music track in the game's `Assets`, by its file's name without its type (.wav, .m4a, .mp3 or
-/// .caf): `Sound.play(.jump)`, `Music.play(.theme)`. See `ImageName`.
-public struct SoundName: Hashable, Sendable {
+/// .caf): `Sound.play(.jump)`, `Music.play(.theme)`. See `ImageName`, which says how it's saved too.
+public struct SoundName: Hashable, Sendable, Codable {
+    /// The file's name, without its type.
     public let name: String
+    /// The sound called `name`, for one that comes from data.
     public init(_ name: String) { self.name = name }
+    /// Reads one saved as its name.
+    public init(from decoder: Decoder) throws { name = try decoder.singleValueContainer().decode(String.self) }
+    /// Saves it as its name.
+    public func encode(to encoder: Encoder) throws { try save(name, to: encoder) }
 }
 
 /// An object maps place, by its definition's name, `Assets/Objects/<name>.object`: `tilemap.objects(named: .start)`,
-/// or `object.name == .door` for a placed one. See `ImageName`.
-public struct ObjectName: Hashable, Sendable {
+/// or `object.name == .door` for a placed one. See `ImageName`, which says how it's saved too.
+public struct ObjectName: Hashable, Sendable, Codable {
+    /// The definition's file name, without ".object", which a placed object has as its `name`.
     public let name: String
+    /// The object called `name`, for one that comes from data, like a den's `creature`.
     public init(_ name: String) { self.name = name }
+    /// Reads one saved as its name.
+    public init(from decoder: Decoder) throws { name = try decoder.singleValueContainer().decode(String.self) }
+    /// Saves it as its name.
+    public func encode(to encoder: Encoder) throws { try save(name, to: encoder) }
 
     /// Whether a placed object's name is this one's: `object.name == .door`.
     public static func == (name: String, object: ObjectName) -> Bool { name == object.name }
+    /// Whether a placed object's name isn't this one's: `object.name != .door`.
     public static func != (name: String, object: ObjectName) -> Bool { name != object.name }
 }
 
+/// Saves an asset's `name` as the whole of its name's value, a plain string.
+func save(_ name: String, to encoder: Encoder) throws {
+    var container = encoder.singleValueContainer()
+    try container.encode(name)
+}
+
+/// The game's own files in `Assets`, beside its art and maps: a level's data, a list of words.
+public enum Assets {
+    /// The file called `file`, with its type, in `Assets` or a folder in it: `Assets.url("words.txt")`. It's found by
+    /// name as the engine finds an image, outside an app in the folder the game runs in and in an app inside it, where
+    /// a path like `Assets/words.txt` isn't. Nil when there's none.
+    public static func url(_ file: String) -> URL? {
+        let url = assetURL(file)
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+}
+
 public extension Game {
+    /// 320×180 pixels, a sixth of 1080p, unless the game says otherwise.
     var resolution: Size { Size(320, 180) }
 
+    /// What `@main` runs: makes the game and its first scene, then opens a window and runs it, or in the editor sends
+    /// it to the preview, or on iOS starts the app.
     static func main() {
         setvbuf(stdout, nil, _IOLBF, 0) // print() reaches the editor console line by line, not when a buffer fills
         Scene.module = String(String(reflecting: Self.self).prefix { $0 != "." }) // where objects' classes are

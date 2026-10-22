@@ -84,3 +84,17 @@ import Testing
     }
     #expect(walker.position == [14, 2]) // down past its corner
 }
+
+@MainActor @Test func anEntityStoppedPartOfAPixelIntoAStepStaysPut() {
+    let scene = Scene()
+    let crab = Entity()
+    scene.add(crab, at: [10, 10])
+    crab.velocity = [30, 0] // half a pixel an update, which rounds to a whole one
+    crab.move(1.0 / 60)
+    crab.velocity = .zero
+    let (position, drawn) = (crab.position, crab.position + crab.remainder)
+    for _ in 0..<10 {
+        crab.move(1.0 / 60)
+        #expect(crab.position == position && crab.position + crab.remainder == drawn) // not a pixel back and forth
+    }
+}

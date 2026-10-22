@@ -1,3 +1,4 @@
+import Metal
 import Testing
 @testable import Spellcrest
 
@@ -108,4 +109,65 @@ import Testing
         return torch.radius(seed: 7)
     }
     #expect(radii.allSatisfy { (8...10).contains($0) } && Set(radii).count == 60) // wavering, by up to a fifth
+}
+
+@MainActor @Test func aTransitionStartedDuringAnotherGoesOnFromHowFarTheViewIsCovered() {
+    let (village, house, wood) = (Scene(), Scene(), Scene())
+    Scene.current = village
+    defer { (Scene.current, Scene.changing) = (Scene(), nil) }
+    Scene.fade(to: house, duration: 1)
+    for _ in 0..<6 { Scene.tick(0.125) } // past the switch, three quarters of the way: half covered again
+    #expect(Scene.current === house && Scene.changing?.cover == 0.5)
+    Scene.fade(to: wood, duration: 1) // darkening again from half covered, not jumping to none
+    #expect(Scene.changing?.cover == 0.5 && Scene.changing?.next === wood)
+    Scene.tick(0.125)
+    #expect(Scene.changing?.cover == 0.75 && Scene.current === house)
+    Scene.tick(0.125)
+    #expect(Scene.changing?.cover == 1 && Scene.current === wood)
+}
+
+@MainActor @Test func aDissolveBreaksUpTheSceneAsTheUpdateThatStartedItLeftIt() throws {
+    final class Title: Scene {
+        var chosen = false
+        override func update(_ dt: Double) {
+            guard !chosen else { return }
+            chosen = true // as a click on a choice does, in the update that starts the dissolve
+            Scene.transition(to: Scene(), duration: 1, style: .dissolve)
+        }
+        override func draw(_ screen: Screen) {
+            super.draw(screen)
+            screen.fill(Rect(x: 0, y: 0, width: 2, height: 2), color: chosen ? 0x00FF00 : 0xFF0000)
+        }
+    }
+    let loop = Loop(resolution: Size(2, 2), device: try #require(MTLCreateSystemDefaultDevice()))
+    Scene.current = Title()
+    defer { (Scene.current, Scene.changing) = (Scene(), nil) }
+    for now in [loop.last, loop.last + Loop.step] { // a frame before the choice, red, then the update that makes it
+        let commands = try #require(loop.tick(at: now))
+        commands.commit()
+        commands.waitUntilCompleted()
+    }
+    let commands = try #require(loop.queue.makeCommandBuffer())
+    let pixels = try #require(loop.screen.device.makeBuffer(length: 16, options: .storageModeShared))
+    let blit = try #require(commands.makeBlitCommandEncoder())
+    blit.copy(from: loop.screen.snapshot, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(), sourceSize: MTLSize(width: 2, height: 2, depth: 1),
+              to: pixels, destinationOffset: 0, destinationBytesPerRow: 8, destinationBytesPerImage: 16)
+    blit.endEncoding()
+    commands.commit()
+    commands.waitUntilCompleted()
+    let snapped = Array(UnsafeBufferPointer(start: pixels.contents().bindMemory(to: UInt32.self, capacity: 4), count: 4))
+    #expect(snapped == [UInt32](repeating: 0xFF00_FF00, count: 4) && Scene.changing?.snapped == true && Scene.changing?.old == nil)
+}
+
+@MainActor @Test func aFlashFadesOnAnEntitysOwnSpriteAsItsCommentSays() {
+    final class Crab: Entity {
+        override func update(_ dt: Double) {
+            if let flash = sprite?.flash { sprite?.flash = max(0, flash - dt * 8) } // as `Sprite.flash`'s comment has it
+        }
+    }
+    let crab = Crab()
+    crab.sprite = Sprite("crab")
+    crab.sprite?.flash = 1
+    crab.update(0.0625)
+    #expect(crab.sprite?.flash == 0.5)
 }

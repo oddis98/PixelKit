@@ -58,11 +58,17 @@ import Synchronization
     /// The built-in font's glyphs, made on first use.
     lazy var builtInFont = Font.builtInTexture(device)
     /// One white pixel, which `fill` stretches and tints.
-    lazy var white: MTLTexture = {
+    lazy var white: MTLTexture = pixel(UInt32.max)
+    /// One clear pixel, which a missing image draws as.
+    lazy var clear: MTLTexture = pixel(0)
+    /// The images that are missing or can't be read, drawn as `clear`.
+    var missing: Set<String> = []
+
+    private func pixel(_ rgba: UInt32) -> MTLTexture {
         let texture = device.makeTexture(descriptor: .texture2DDescriptor(pixelFormat: .rgba8Unorm, width: 1, height: 1, mipmapped: false))!
-        texture.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: [UInt32.max], bytesPerRow: 4)
+        texture.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: [rgba], bytesPerRow: 4)
         return texture
-    }()
+    }
     /// Subtracted from every position; the scene sets it to its camera.
     var offset = Vector.zero
     /// How what's drawn now is lit by the scene's light maps, and where it stands, for `.standing`, in world pixels.
@@ -126,18 +132,22 @@ import Synchronization
         return texture!
     }
 
-    /// Draws all of `Assets/<image>.png` with its top-left corner at (x, y), snapped to whole pixels.
-    public func draw(_ image: ImageName, x: Double, y: Double) { draw(image.name, x: x, y: y) }
+    /// Draws all of `Assets/<image>.png` with its top-left corner at (x, y), each of its pixels `scale` pixels square:
+    /// 3 for a title three times the size it's drawn. Where the canvas is drawn bigger than the game, as it is on most
+    /// screens, x and y go to the nearest part of a pixel below them, so what moves between pixels moves smoothly; give
+    /// whole numbers to keep it on the game's pixels.
+    public func draw(_ image: ImageName, x: Double, y: Double, scale: Int = 1) { draw(image.name, x: x, y: y, scale: scale) }
 
     /// Draws an image named in a string.
-    @_disfavoredOverload public func draw(_ image: String, x: Double, y: Double) {
+    @_disfavoredOverload public func draw(_ image: String, x: Double, y: Double, scale: Int = 1) {
         let texture = texture(image)
-        quad(texture, x: x, y: y, source: Rect(x: 0, y: 0, width: texture.width, height: texture.height))
+        quad(texture, x: x, y: y, source: Rect(x: 0, y: 0, width: texture.width, height: texture.height),
+             size: Size(texture.width * scale, texture.height * scale))
     }
 
-    /// Draws the sprite's current frame with its top-left corner at (x, y), snapped to whole pixels: added to what's
-    /// under it if it `glows`, and through its `shader` once that's compiled.
-    public func draw(_ sprite: Sprite, x: Double, y: Double) {
+    /// Draws the sprite's current frame with its top-left corner at (x, y), as `draw(_:x:y:scale:)` draws an image:
+    /// added to what's under it if it `glows`, and through its `shader` once that's compiled.
+    public func draw(_ sprite: Sprite, x: Double, y: Double, scale: Int = 1) {
         let texture = texture(sprite.image)
         var frame = 0
         if let name = sprite.animation {
@@ -152,8 +162,19 @@ import Synchronization
         if let shader = sprite.shader, let made = self.shader(shader.name.name, .color) {
             (state, values) = (sprite.glows ? made.glowing : made.state, self.values(shader))
         }
-        quad(texture, x: x, y: y, source: source, flip: sprite.flipped, color: sprite.color, opacity: sprite.opacity, flash: sprite.flash,
-             glows: sprite.glows, state: state, values: values, frame: [Float(source.x), Float(source.y)])
+        quad(texture, x: x, y: y, source: source, size: Size(source.width * scale, source.height * scale), flip: sprite.flipped,
+             color: sprite.color, opacity: sprite.opacity, flash: sprite.flash, glows: sprite.glows, state: state, values: values,
+             frame: [Float(source.x), Float(source.y)])
+    }
+
+    /// The size of one of the game's images: a frame's, if its `.json` cuts it into frames, else the whole image's;
+    /// nil when there's none. To lay out what's drawn with it: `x: Double(160 - screen.size(of: .title)!.width / 2)`.
+    public func size(of image: ImageName) -> Size? { size(of: image.name) }
+
+    /// The size of an image named in a string.
+    @_disfavoredOverload public func size(of image: String) -> Size? {
+        _ = texture(image)
+        return missing.contains(image) ? nil : frame(image)
     }
 
     /// Draws the tilemap's `layers` (all of them unless you say), first to last: only the tiles on the canvas, so
@@ -241,16 +262,21 @@ import Synchronization
         return Rect(x: index % columns * size.width, y: index / columns * size.height, width: size.width, height: size.height)
     }
 
+    /// The image `name`, loaded the first time it's drawn. One that's missing or can't be read draws nothing, and the
+    /// console says why, once, so the game goes on; where files can change, it's loaded once its file is there.
     func texture(_ name: String) -> MTLTexture {
         if let texture = textures[name] { return texture }
         let url = assetURL("\(name).png")
+        modified["\(name).png"] = modificationDate(url)
         do {
             let texture = try loader.newTexture(URL: url, options: [.SRGB: false])
             textures[name] = texture
-            modified["\(name).png"] = modificationDate(url)
             return texture
         } catch {
-            fatalError("Spellcrest: can't load \(url.path): \(error.localizedDescription)")
+            if warned.insert("\(name).png").inserted { print("Spellcrest: can't load \(url.path), so it draws nothing: \(error.localizedDescription)") }
+            missing.insert(name)
+            textures[name] = clear
+            return clear
         }
     }
 
@@ -279,6 +305,7 @@ import Synchronization
                 (sheets[name], fonts[name]) = (nil, nil) // read again on next use
             } else if let texture = try? loader.newTexture(URL: url, options: [.SRGB: false]) {
                 (textures[name], fonts[name]) = (texture, nil)
+                missing.remove(name)
             }
         }
     }
@@ -449,12 +476,15 @@ func clearColor(_ rgb: UInt32) -> MTLClearColor {
 }
 
 /// The biggest scale of `canvas` that fits in `drawable`, so on a phone the game reaches the screen's edges: at the top
-/// when the screen is taller than wide, leaving the rest to the touch controls, and centered otherwise. Not a whole
-/// number, so the canvas, drawn at the nearest whole one (`canvasScale`), is scaled the rest of the way smoothly.
-func fit(_ canvas: Size, in drawable: CGSize) -> MTLViewport {
-    let scale = min(drawable.width / Double(canvas.width), drawable.height / Double(canvas.height))
+/// when the screen is taller than wide, below `top` (the safe area's inset there, the Dynamic Island's, in the
+/// drawable's units), leaving the rest to the touch controls, and centered otherwise. Not a whole number, so the
+/// canvas, drawn at the nearest whole one (`canvasScale`), is scaled the rest of the way smoothly.
+func fit(_ canvas: Size, in drawable: CGSize, top: Double = 0) -> MTLViewport {
+    let upright = drawable.height > drawable.width
+    let room = upright ? drawable.height - top : drawable.height
+    let scale = min(drawable.width / Double(canvas.width), room / Double(canvas.height))
     let (width, height) = (Double(canvas.width) * scale, Double(canvas.height) * scale)
-    return MTLViewport(originX: (drawable.width - width) / 2, originY: drawable.height > drawable.width ? 0 : (drawable.height - height) / 2,
+    return MTLViewport(originX: (drawable.width - width) / 2, originY: upright ? top : (drawable.height - height) / 2,
                        width: width, height: height, znear: 0, zfar: 1)
 }
 
@@ -727,6 +757,14 @@ func once<Value: Sendable>(_ key: String, in kept: borrowing Mutex<[String: Valu
     let value = try read()
     if keeping { kept.withLock { $0[key] = value } }
     return value
+}
+
+/// What the console has said that's best said once, like that a file is missing, by what it's about.
+let said = Mutex<Set<String>>([])
+
+/// Prints `message` the first time something is said about `key`, from any thread.
+func say(once key: String, _ message: @autoclosure () -> String) {
+    if said.withLock({ $0.insert(key).inserted }) { print(message()) }
 }
 
 /// The files in `Assets` and its folders, by name.

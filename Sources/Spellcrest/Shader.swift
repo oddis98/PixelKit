@@ -1,9 +1,16 @@
 import MetalKit
 
-/// A shader in the game's `Assets`, by its `.metal` file's name: `Shader(.ripple)`. See `ImageName`.
-public struct ShaderName: Hashable, Sendable {
+/// A shader in the game's `Assets`, by its `.metal` file's name: `Shader(.ripple)`. See `ImageName`, which says how
+/// it's saved too.
+public struct ShaderName: Hashable, Sendable, Codable {
+    /// The file's name, without ".metal", which is its function's too.
     public let name: String
+    /// The shader called `name`, for one that comes from data.
     public init(_ name: String) { self.name = name }
+    /// Reads one saved as its name.
+    public init(from decoder: Decoder) throws { name = try decoder.singleValueContainer().decode(String.self) }
+    /// Saves it as its name.
+    public func encode(to encoder: Encoder) throws { try save(name, to: encoder) }
 }
 
 /// One of the game's own shaders, `Assets/Shaders/<name>.metal`, and up to 16 numbers for it. Its file holds a Metal
@@ -20,9 +27,12 @@ public struct ShaderName: Hashable, Sendable {
 /// starts, and where files can change, again when its file does. Until then, and if it doesn't compile, what it's on
 /// draws without it, and the console says why: `<file>:<line>:<column>: error: <message>`.
 public struct Shader: Sendable, Equatable {
+    /// Which of the game's shaders it is.
     public var name: ShaderName
+    /// The numbers it's given, `values[0]` to `values[15]` in Metal; those past 16 are left out.
     public var values: [Double]
 
+    /// One of the game's shaders with numbers for it: `Shader(.ripple, [x, y, age])`.
     public init(_ name: ShaderName, _ values: [Double] = []) { (self.name, self.values) = (name, values) }
 
     /// A shader named in a string.

@@ -42,6 +42,21 @@ struct TouchLayout {
     func covers(_ point: CGPoint) -> Bool {
         hypot(point.x - dpad.x, point.y - dpad.y) < Self.pad * 1.6 || hypot(point.x - middle.x, point.y - middle.y) < Self.spread + Self.button * 1.4
     }
+
+    /// Where the D-pad and the buttons are drawn, in the pixels of a `canvas` shown with its top-left corner at `origin`,
+    /// `scale` points to a pixel: those parts of them over it, for `Input.touchControls`.
+    func rectangles(over canvas: Size, at origin: CGPoint, scale: Double) -> [Rect] {
+        let reach = Self.spread + Self.button
+        let drawn = [CGRect(x: dpad.x - Self.pad, y: dpad.y - Self.pad, width: Self.pad * 2, height: Self.pad * 2),
+                     CGRect(x: middle.x - reach, y: middle.y - reach, width: reach * 2, height: reach * 2)]
+        return drawn.compactMap { box in
+            let pixels = CGRect(x: (box.minX - origin.x) / scale, y: (box.minY - origin.y) / scale, width: box.width / scale, height: box.height / scale)
+                .intersection(CGRect(x: 0, y: 0, width: canvas.width, height: canvas.height))
+            guard !pixels.isEmpty else { return nil }
+            let (left, top) = (Int(pixels.minX.rounded(.down)), Int(pixels.minY.rounded(.down)))
+            return Rect(x: left, y: top, width: Int(pixels.maxX.rounded(.up)) - left, height: Int(pixels.maxY.rounded(.up)) - top)
+        }
+    }
 }
 
 #if os(iOS)
@@ -100,7 +115,11 @@ final class TouchControls: UIView {
     private var fingers: Set<UITouch> = [] // on the controls
     private var pointing: UITouch? // the pointer
     var shown = true {
-        didSet { if shown != oldValue { setNeedsDisplay() } }
+        didSet {
+            guard shown != oldValue else { return }
+            setNeedsDisplay()
+            report()
+        }
     }
 
     override init(frame: CGRect) {
@@ -116,7 +135,25 @@ final class TouchControls: UIView {
         TouchLayout(size: bounds.size, left: safeAreaInsets.left, right: safeAreaInsets.right, bottom: safeAreaInsets.bottom)
     }
 
-    override func safeAreaInsetsDidChange() { setNeedsDisplay() }
+    override func safeAreaInsetsDidChange() {
+        setNeedsDisplay()
+        report()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        report()
+    }
+
+    /// Where the canvas is in the view, as the game's view draws it (`fit`), below the safe area's top when upright.
+    private var viewport: MTLViewport { fit(GameApp.resolution, in: bounds.size, top: safeAreaInsets.top) }
+
+    /// Tells the game where the controls are over its canvas, `Input.touchControls`, as they show or move.
+    private func report() {
+        let (canvas, viewport) = (GameApp.resolution, viewport)
+        Input.touchControls = shown ? layout.rectangles(over: canvas, at: CGPoint(x: viewport.originX, y: viewport.originY),
+                                                         scale: viewport.width / Double(canvas.width)) : []
+    }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         let layout = layout
@@ -138,8 +175,8 @@ final class TouchControls: UIView {
     }
 
     private func update() {
-        let canvas = GameApp.resolution
-        Input.point(pointing.map { pixel(at: $0.location(in: self), in: fit(canvas, in: bounds.size), canvas: canvas) }, down: pointing != nil)
+        let (canvas, viewport) = (GameApp.resolution, viewport)
+        Input.point(pointing.map { pixel(at: $0.location(in: self), in: viewport, canvas: canvas) }, down: pointing != nil)
         let layout = layout
         let now = fingers.reduce(into: Set<Button>()) { $0.formUnion(layout.buttons(at: $1.location(in: self))) }
         guard now != held else { return }

@@ -116,7 +116,7 @@ public struct ObjectFile: AssetFile, Equatable, Sendable {
     public var height: Int?
     /// The part that collides, from its top-left corner; nil is all of it.
     public var hitbox: Hitbox?
-    /// Blocks solid movers, as `Entity.solid` does; nil is false.
+    /// Blocks other entities as they move, as `Entity.solid` does; nil is false.
     public var solid: Bool?
     /// Its hitbox stops light from a `Light` with shadows, as `Entity.opaque` does; nil is false.
     public var opaque: Bool?

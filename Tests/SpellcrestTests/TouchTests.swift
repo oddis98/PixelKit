@@ -27,3 +27,16 @@ import Testing
     #expect([layout.a, layout.b, layout.x, layout.y].allSatisfy(layout.covers))
     #expect(!layout.covers(CGPoint(x: 426, y: 100)) && !layout.covers(CGPoint(x: 426, y: 380))) // the game, up top and between them
 }
+
+@Test func theControlsSayWhereTheyAreOverTheCanvas() {
+    // An iPhone SE sideways, 667x375 points and no insets, showing a 240x135 canvas from edge to edge: as Driftwood
+    // measured it on a screenshot, the D-pad reaches to about x 45, and the buttons start about x 182, y 76.
+    let canvas = Size(240, 135), layout = TouchLayout(size: CGSize(width: 667, height: 375), left: 0, right: 0, bottom: 0)
+    let shown = fit(canvas, in: CGSize(width: 667, height: 375))
+    #expect(layout.rectangles(over: canvas, at: CGPoint(x: shown.originX, y: shown.originY), scale: shown.width / 240)
+        == [Rect(x: 8, y: 88, width: 37, height: 37), Rect(x: 182, y: 76, width: 50, height: 49)])
+    // Upright, they're below the game: none over it.
+    let upright = TouchLayout(size: CGSize(width: 375, height: 667), left: 0, right: 0, bottom: 0)
+    let top = fit(canvas, in: CGSize(width: 375, height: 667), top: 20)
+    #expect(upright.rectangles(over: canvas, at: CGPoint(x: top.originX, y: top.originY), scale: top.width / 240).isEmpty)
+}

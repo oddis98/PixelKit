@@ -16,13 +16,17 @@ public struct Parallax: Sendable {
     /// How many pixels its rows sway, each a little after the one above, as leaves do in a wind; 0 holds it still.
     public var sway: Double
 
+    /// `image`, moving `scroll` pixels for each of the camera's from `offset`, repeating `repeats` ways and swaying `sway`
+    /// pixels: far hills are `Parallax(image: .hills, scroll: 0.3, offset: [0, 40], repeats: .across)`.
     public init(image: ImageName, scroll: Double = 0, offset: Vector = .zero, repeats: Repeats = [], sway: Double = 0) {
         (self.image, self.scroll, self.offset, self.repeats, self.sway) = (image, scroll, offset, repeats, sway)
     }
 
     /// Which ways a `Parallax` repeats.
     public struct Repeats: OptionSet, Sendable {
+        /// The ways as bits: 1 across, 2 down.
         public let rawValue: Int
+        /// The ways `rawValue`'s bits say, which `across`, `down` and `both` name.
         public init(rawValue: Int) { self.rawValue = rawValue }
         /// Left and right, as far hills do.
         public static let across = Repeats(rawValue: 1)

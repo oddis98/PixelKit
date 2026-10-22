@@ -133,3 +133,29 @@ func png(width: Int, height: Int, to file: URL) throws {
     #expect(tiles(at: [-4, -4]) == 4 && tiles(at: [36, 20]) == 1) // past the top-left and bottom-right corners
     #expect(tiles(at: [100, 0]) == 0)
 }
+
+@MainActor @Test func aMapMadeInCodeHasItsTilesetsPropertiesAndAFilesLayersHaveTheirNames() throws {
+    let assets = FileManager.default.temporaryDirectory.appending(path: "coded-\(UUID())/Assets")
+    try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
+    FileManager.default.changeCurrentDirectoryPath(assets.deletingLastPathComponent().path) // games load Assets/ relative to here
+    try SheetFile(frameWidth: 8, frameHeight: 8, opaque: [1], properties: [.init(name: "water", type: .toggle)], tiles: [1: ["water": "true"]])
+        .write(to: assets.appending(path: "tiles.json"))
+    let coded = Tilemap("tiles", tileSize: 8, rows: [".#"], legend: ["#": 1])
+    #expect(coded.properties(at: [8, 0], layer: 0).bool("water") && !coded.properties(at: [0, 0], layer: 0).bool("water"))
+    #expect(coded.opaque == [1] && coded.solid == [1] && coded.layer(named: "Ground") == nil)
+    try TilemapFile(tileset: "tiles", width: 1, height: 1, layers: [.init(name: "Ground", tiles: [0]), .init(name: "Paths", tiles: [-1])])
+        .write(to: assets.appending(path: "level.tilemap"))
+    #expect(Tilemap("level").layer(named: "Paths") == 1 && Tilemap("level").layer(named: "Ground") == 0 && Tilemap("level").layer(named: "Roof") == nil)
+}
+
+@MainActor @Test func aMissingMapIsEmptyAndLoadsOnceItsFileIsThere() throws {
+    let assets = FileManager.default.temporaryDirectory.appending(path: "later-\(UUID())/Assets")
+    try FileManager.default.createDirectory(at: assets, withIntermediateDirectories: true)
+    FileManager.default.changeCurrentDirectoryPath(assets.deletingLastPathComponent().path) // games load Assets/ relative to here
+    var map = Tilemap("cave")
+    #expect(map.layers.isEmpty && map.tileset.isEmpty)
+    try SheetFile(frameWidth: 8, frameHeight: 8).write(to: assets.appending(path: "rock.json"))
+    try TilemapFile(tileset: "rock", width: 2, height: 1, layers: [.init(name: "Ground", tiles: [0, 1])]).write(to: assets.appending(path: "cave.tilemap"))
+    map.reloadIfChanged()
+    #expect(map.layers == [[0, 1]] && map.tileset == "rock")
+}

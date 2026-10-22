@@ -8,7 +8,7 @@ import Spellcrest
 }
 
 /// What the player has done. Each place hands it to the next, so hot reload keeps it (a `static var` would start
-/// over), and coming out of the house saves it.
+/// over), and coming back into the village, out of the house or the wood, saves it.
 final class Progress: Codable {
     /// Where the player was in the village when the game was saved.
     var place: Vector?
@@ -37,6 +37,7 @@ final class Place: Scene {
     /// What's being said, a page at a time, and how much of the first page is typed out.
     var words: [String] = []
     var letters = 0.0
+    var shown = 0 // how long the page is typed out, as `draw` wraps it, line breaks and all
 
     init(_ map: MapName, _ progress: Progress, at spot: ObjectName = .start, position: Vector? = nil) {
         (self.map, self.progress) = (map, progress)
@@ -68,17 +69,17 @@ final class Place: Scene {
     override func update(_ dt: Double) {
         super.update(dt)
         guard let page = words.first else { return walk(dt) }
-        letters = min(letters + dt * 40, Double(page.count)) // 40 letters a second
+        let length = Double(max(shown, page.count)) // the page's own count until it's drawn
+        letters = min(letters + dt * 40, length) // 40 letters a second
         if Input.pressed(.a) || Input.pressed(.pointer) { // a click or tap too: the rest of the page, then the next one
-            if letters < Double(page.count) { letters = Double(page.count) } else { (words, letters) = (Array(words.dropFirst()), 0) }
+            if letters < length { letters = length } else { (words, letters, shown) = (Array(words.dropFirst()), 0, 0) }
         }
     }
 
     /// The D-pad walks, and so does a click or a tap, to where it points; A talks to whoever's in front, X cuts a bush
     /// there, Y calls lightning down a little way ahead and B casts a gloom there, and doors lead on.
     func walk(_ dt: Double) {
-        func axis(_ back: Button, _ on: Button) -> Double { (Input.held(on) ? 1 : 0) - (Input.held(back) ? 1 : 0) }
-        var direction: Vector = [axis(.left, .right), axis(.up, .down)]
+        var direction = Input.direction // 1 long whichever way, so the player goes as fast diagonally
         if Input.pressed(.pointer), let point = Input.pointer { route = player.path(to: point + camera, diagonals: true) ?? [] }
         if direction == .zero, !route.isEmpty {
             player.walk(dt, along: &route, speed: 60)
@@ -99,7 +100,7 @@ final class Place: Scene {
         let front = player.position + [8, 13] + facing * 10 // just ahead of the feet
         let reach = Rect(x: Int(front.x) - 4, y: Int(front.y) - 4, width: 8, height: 8)
         if Input.pressed(.a), let villager = entities.lazy.compactMap({ $0 as? Villager }).first(where: { $0.overlaps(reach) }) {
-            words = villager.words
+            (words, shown) = (villager.words, 0)
         }
         if Input.pressed(.x), tilemap?.tile(at: front, layer: 0) == Tile.bush {
             tilemap?.setTile(Tile.stump, at: front, layer: 0)
@@ -112,10 +113,10 @@ final class Place: Scene {
             shake(0.9)
         }
         if Input.pressed(.b) { add(Gloom(), at: ahead - [1, 1]) }
-        effects = entities.compactMap { ($0 as? Strike)?.shock(camera) } // its ripple spreading over the picture
+        effects = entities.compactMap { ($0 as? Strike)?.shock(camera + shakeOffset) } // its ripple on the picture, shaken with it
         if let door = doors.first(where: { player.overlaps($0.box) }), let to = door.map("to") {
             let next = Place(to, progress, at: door.object("at") ?? .start)
-            if next.map == .village { // coming out of the house saves the game
+            if next.map == .village { // coming back into the village, out of the house or the wood, saves the game
                 progress.place = next.player.position
                 Save.write(progress, to: "progress")
             }
@@ -128,10 +129,12 @@ final class Place: Scene {
         guard let page = words.first else { return }
         let box = Rect(x: 8, y: screen.size.height - 48, width: screen.size.width - 16, height: 40)
         screen.panel(.textbox, in: box) // Assets/Sprites/textbox.png, stretched
-        // Wrapped first, so a word doesn't jump to the next line as it's typed.
-        let typed = screen.wrap(page, width: box.width - 16).prefix(Int(letters))
-        screen.text(String(typed), x: Double(box.x + 8), y: Double(box.y + 8))
-        if letters == Double(page.count) { screen.text(">", x: Double(box.x + box.width - 10), y: Double(box.y + box.height - 10)) }
+        // Wrapped first, so a word doesn't jump to the next line as it's typed, and typed out to the wrapped page's end:
+        // a word too wide for the box breaks with a line break of its own.
+        let typed = screen.wrap(page, width: box.width - 16)
+        shown = typed.count
+        screen.text(String(typed.prefix(Int(letters))), x: Double(box.x + 8), y: Double(box.y + 8))
+        if letters >= Double(shown) { screen.text(">", x: Double(box.x + box.width - 10), y: Double(box.y + box.height - 10)) }
     }
 }
 
@@ -195,9 +198,10 @@ final class Strike: Entity {
         screen.bolt(from: position + [Double(crackle % 3) * 9 - 24, -220], to: position + [1, 1], seed: crackle)
     }
 
-    /// Its shock on the picture: `ripple.metal` spreading from where it struck, in the view's pixels.
-    func shock(_ camera: Vector) -> Shader? {
-        age < 0.7 ? Shader(.ripple, [middle.x - camera.x, middle.y - camera.y, age]) : nil
+    /// Its shock on the picture: `ripple.metal` spreading from where it struck, in the pixels of a view whose top-left
+    /// corner is at `view`: the camera, and the shake on it.
+    func shock(_ view: Vector) -> Shader? {
+        age < 0.7 ? Shader(.ripple, [middle.x - view.x, middle.y - view.y, age]) : nil
     }
 }
 
