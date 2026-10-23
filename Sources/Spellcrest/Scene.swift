@@ -42,13 +42,21 @@ import Synchronization
     /// view, first to last.
     public var overhangs: [Parallax] = []
     /// The game's layer shaders, from `Assets/Shaders`, run on the picture in turn after the world and its overhangs and
-    /// before what's drawn after `super.draw`: a ripple, a heat haze, a wobble. Each draws once it has compiled.
+    /// before what's drawn after `super.draw`: a ripple, a heat haze, a wobble. Each draws once it has compiled, over the
+    /// whole canvas, so `bends` cost less where they'll do.
     public var effects: [Shader] = []
     /// Its particles: sparks, embers, smoke and motes, put out by its entities' `emitter`s and by
     /// `particles.burst(_:at:count:angle:sortY:)`, moved with its updates and drawn with its world.
     public let particles = Particles()
     /// Rain or snow falling over its world; nil, the default, has none.
     public var weather: Weather?
+    /// A bloom of what glows in its world, spreading past its pixels into the dark around it, and of light past daylight;
+    /// nil, the default, has none.
+    public var bloom: Bloom?
+    /// Where the air bends the picture this frame, around points in the world: rings going out where spells land, heat
+    /// haze, swirls. Set them in the scene's updates as what bends the air moves and changes; drawn after the bloom and
+    /// before the `effects`.
+    public var bends: [Bend] = []
     var drift = Vector.zero // how far the weather's wind has blown it
     var clock = 0.0 // seconds the scene has updated, for what moves: clouds, fog, swaying, shaking, shaders
     var shaking = Shake()
@@ -227,7 +235,7 @@ import Synchronization
     /// its tilemap, its particles on the ground and rain's splashes, its entities among its particles standing, the map's
     /// layers above and the entities' parts above, its particles in the air and its rain or snow, in that order, then its
     /// fog and its overhangs, lit by its light (`darkness` and the entities' `light`s, `clouds`, `vignette` and `gray`),
-    /// then its `effects`. What's drawn after it stays lit.
+    /// then its `bloom`, its `bends` and its `effects`. What's drawn after it stays lit.
     open func draw(_ screen: Screen) {
         for entity in entities {
             entity.place(screen.alpha)
@@ -239,6 +247,7 @@ import Synchronization
         }
         screen.time = clock - (1 - screen.alpha) * Loop.step // between updates, as the entities are
         screen.offset = camera + shaking.offset(at: screen.time)
+        (screen.blooming, screen.glowed) = (bloom != nil, []) // what glows is kept for the bloom as it's drawn
         screen.light(self, entities.compactMap { entity in
             entity.light.map { Shine(middle: screen.middle(of: entity) + $0.offset, radius: $0.radius(seed: entity.number), light: $0) }
         })
@@ -271,6 +280,8 @@ import Synchronization
         lit(.daylight)
         for overhang in overhangs { screen.draw(overhang) }
         screen.lighting = .none
+        screen.bloom(bloom, laid)
+        screen.bend(bends)
         screen.apply(effects)
         screen.offset = .zero
     }

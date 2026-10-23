@@ -137,7 +137,7 @@ extension Screen {
     /// bound for every quad to read as `lighting` says. The maps have a texel for each world pixel the view shows, from `offset` rounded
     /// down, so they stay on the ground as the camera moves between pixels, and cost the same at any `scale`.
     func light(_ scene: Scene, _ lights: [Shine]) {
-        lit = false
+        (lit, pastDaylight) = (false, nil)
         let dark = min(max(scene.darkness, 0), 1)
         let dim = dark > 0 || scene.clouds != nil // so a light up to daylight shows
         let (origin, size) = lightMaps(under: offset, game: self.size)
@@ -147,6 +147,12 @@ extension Screen {
                 && m.x + r > 0 && m.y + r > 0 && m.x - r < Double(size.width) && m.y - r < Double(size.height)
         }
         guard dim || scene.gray > 0 || scene.clouds != nil || scene.fog != nil || scene.vignette > 0 || !shown.isEmpty else { return }
+        pastDaylight = shown.filter { $0.light.brightness > 1 }.reduce(nil) { box, shine in // in the view's pixels
+            let (m, r) = (shine.middle - offset, shine.radius)
+            let here = SIMD4<Float>(Float(m.x - r), Float(m.y - r), Float(m.x + r), Float(m.y + r))
+            guard let box else { return here }
+            return [min(box.x, here.x), min(box.y, here.y), max(box.z, here.z), max(box.w, here.w)]
+        }
         interrupt()
         var canvas = current!
         let night = tint(scene.darknessColor), lit = 1 - Float(dark)

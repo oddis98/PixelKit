@@ -25,7 +25,8 @@ enum Tile {
 /// fire; or the wood through the gap in the hedge, at dusk in the rain under its canopy, lit by the player's lantern.
 /// Its objects, placed in the map editor and defined in Assets/Objects, say what's where: trees, whose trunks stop
 /// light, the house's front, its fireplace and the villager, doors with where they lead (`to`) and where you come out
-/// (`at`), and where the game starts.
+/// (`at`), and where the game starts. What glows blooms, spilling into the dark round it, and the air bends round a
+/// gloom and over the fire.
 final class Place: Scene {
     let map: MapName
     let progress: Progress
@@ -45,6 +46,7 @@ final class Place: Scene {
         ySort = true // things draw by where their feet are
         follow = player // the camera keeps them in the middle, and a door's iris closes on them
         background = 0x000000
+        bloom = Bloom() // the lightning, its sparks and the gloom's motes spilling past their pixels
         if map == .house { (darkness, darknessColor) = (0.85, 0x1D2B53) } // a night's blue where the fire doesn't reach
         if map == .village { clouds = Clouds(cover: 0.4, shade: 0.3, size: 70, wind: [12, 5]) }
         if map == .wood { // dusk under the trees, their leaves hanging over the view and swaying, fog and rain between them
@@ -69,6 +71,7 @@ final class Place: Scene {
 
     override func update(_ dt: Double) {
         super.update(dt)
+        bends = entities.compactMap { ($0 as? Gloom)?.swirl ?? ($0 as? Fireplace)?.haze } // the air turning, and shimmering
         guard let page = words.first else { return walk(dt) }
         let length = Double(max(shown, page.count)) // the page's own count until it's drawn
         letters = min(letters + dt * 40, length) // 40 letters a second
@@ -218,10 +221,12 @@ final class Strike: Entity {
     }
 }
 
-/// A gloom: a swirl that turns, taking the light and the color from around it, motes of violet drifting in it, growing
-/// for half a second, lasting three, then fading.
+/// A gloom: a swirl that turns, taking the light and the color from around it, the air turning in it and motes of
+/// violet drifting there, growing for half a second, lasting three, then fading.
 final class Gloom: Entity {
-    var age = 0.0
+    var age = 0.0, strength = 0.0
+    /// The air turning in it, as strongly as it takes the light.
+    var swirl: Bend { Bend(.swirl, at: middle, radius: 32 + 24 * strength, strength: 3 * strength) }
 
     override init() {
         super.init()
@@ -232,7 +237,7 @@ final class Gloom: Entity {
 
     override func update(_ dt: Double) {
         age += dt
-        let strength = min(age / 0.5, 1, max(0, 4 - age))
+        strength = min(age / 0.5, 1, max(0, 4 - age))
         light?.radius = 45 + 30 * strength
         light?.brightness = -1.3 * strength
         light?.gray = 0.9 * strength
@@ -242,8 +247,11 @@ final class Gloom: Entity {
     }
 }
 
-/// The house's fire, which lights it in the dark, flickering as flames do.
+/// The house's fire, which lights it in the dark, flickering as flames do, the air shimmering over it.
 final class Fireplace: Entity, Placeable {
+    /// Heat haze over its flames, low in its hearth.
+    var haze: Bend { Bend(.haze, at: position + [16, 24], radius: 10, strength: 0.7) }
+
     override init() {
         super.init()
         light = Light(radius: 80, color: 0xFFA300, flicker: 0.1)

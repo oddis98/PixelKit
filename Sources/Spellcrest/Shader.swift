@@ -20,6 +20,9 @@ public struct ShaderName: Hashable, Sendable, Codable {
 ///   the sprite's frame.
 /// - A layer shader, `half4 name(float2 position, Layer layer, Values values)`, goes on the picture (`Scene.effects`)
 ///   and makes each of its pixels from the picture so far, `layer.sample(position)`; `position` is where it is in the view.
+///   It runs for every pixel of the canvas at the screen's scale, 2.8 million for a game 320 by 180 drawn at 7 times, so
+///   one that changes only part of the picture returns `layer.sample(position)` early everywhere else; to move the
+///   picture round a point, a `Bend` costs less still, drawn only where it is.
 ///
 /// Positions are in the game's pixels, between them where the canvas is drawn bigger. `values[0]` to `values[15]` are
 /// the numbers, `values.time` the scene's time in seconds and `values.size` the canvas's size; `noise`, `fbm`,

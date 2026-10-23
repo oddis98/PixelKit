@@ -233,6 +233,8 @@ struct Laid {
         let start, count: Int
         let texture: MTLTexture
         let glows: Bool
+        var blooms = false // glows, and isn't rain, so a scene's bloom draws it again
+        var box = SIMD4<Float>(.infinity, .infinity, -.infinity, -.infinity) // where its particles are, in the view's pixels
     }
 }
 
@@ -325,6 +327,7 @@ extension Screen {
                 let (first, key, k) = (instances.count / 4, keys[sorted[at]], kindOf[sorted[at]])
                 let look = looks[k]
                 let (tw, th) = (Float(look.texture.width), Float(look.texture.height))
+                var box = SIMD4<Float>(.infinity, .infinity, -.infinity, -.infinity)
                 while at < shown, keys[sorted[at]] == key {
                     let i = sorted[at]
                     let kind = looks[kindOf[i]]
@@ -341,9 +344,11 @@ extension Screen {
                     instances.append(kind.texture === white ? SIMD4(0, 0, 1, 1)
                                                             : SIMD4(u / tw, v / th, (u + Float(kind.width)) / tw, (v + Float(kind.height)) / th))
                     instances.append(SIMD4(kind.mode, 0, 0, 0))
+                    box = SIMD4(min(box.x, Float(left)), min(box.y, Float(top)), max(box.z, Float(left) + Float(kind.width)), max(box.w, Float(top) + Float(kind.height)))
                     at += 1
                 }
-                runs[here].append(Laid.Run(start: first, count: instances.count / 4 - first, texture: look.texture, glows: look.glows))
+                runs[here].append(Laid.Run(start: first, count: instances.count / 4 - first, texture: look.texture, glows: look.glows, blooms: look.glows,
+                                           box: box))
             }
             let weather = here == 0 ? splashes : here == air ? falling : []
             if !weather.isEmpty {

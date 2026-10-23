@@ -27,6 +27,17 @@ import Synchronization
         return madeParticles!
     }
     private var madeParticles: ParticleStates?
+    /// The bloom's and the bends' pipelines, made in the background as the light maps' are.
+    var glowStates: GlowStates {
+        if madeGlow == nil { madeGlow = GlowStates(library, format: canvasDescriptor.pixelFormat) }
+        return madeGlow!
+    }
+    private var madeGlow: GlowStates?
+    /// While a scene with a bloom draws its world (`blooming`), the glowing quads it queues, which the bloom draws again;
+    /// where in the view light past daylight shows, which blooms too, nil where none does; and the bloom's two maps and
+    /// the bends' map.
+    var blooming = false, glowed: [Glowed] = [], pastDaylight: SIMD4<Float>?
+    var bloomMap: MTLTexture?, bloomSpare: MTLTexture?, bendMap: MTLTexture?
     /// How many times the game's size the canvas is drawn at, a whole number: at 1 everything is on the game's whole
     /// pixels, at k on k-ths of them, so what moves between them is drawn where it is (`GameView` sets it for the screen).
     private(set) var scale = 1
@@ -95,7 +106,7 @@ import Synchronization
         loader = MTKTextureLoader(device: device)
 
         let library: MTLLibrary
-        do { library = try device.makeLibrary(source: shaderCommon + shaderEngine + lightShaders + particleShaders, options: nil) } catch {
+        do { library = try device.makeLibrary(source: shaderCommon + shaderEngine + lightShaders + particleShaders + glowShaders, options: nil) } catch {
             fatalError("Spellcrest: its shaders don't compile: \(error)")
         }
         self.library = library
@@ -116,11 +127,13 @@ import Synchronization
         (canvasDescriptor, canvas) = (texture, device.makeTexture(descriptor: texture)!)
         let handed = Handed(value: (library, device))
         DispatchQueue.global(qos: .userInitiated).async {
-            let states = Handed(value: (LightStates(handed.value.0, handed.value.1), ParticleStates(handed.value.0, format: format)))
+            let states = Handed(value: (LightStates(handed.value.0, handed.value.1), ParticleStates(handed.value.0, format: format),
+                                        GlowStates(handed.value.0, format: format)))
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     if self.made == nil { self.made = states.value.0 }
                     if self.madeParticles == nil { self.madeParticles = states.value.1 }
+                    if self.madeGlow == nil { self.madeGlow = states.value.2 }
                 }
             }
         }
@@ -336,6 +349,7 @@ import Synchronization
         var (u0, u1) = (Float(s.x) / w, Float(s.x + s.width) / w)
         let (v0, v1) = (Float(s.y) / h, Float(s.y + s.height) / h)
         if flip { swap(&u0, &u1) }
+        if glows && blooming { glowed.append(Glowed(texture: texture, box: [x0, y0, x1, y1], uv: [u0, v0, u1, v1], color: tint(color, opacity), flash: Float(flash))) }
         queue(texture, [x0, y0, x1, y1], uv: [u0, v0, u1, v1], color: tint(color, opacity),
               effects: [Float(flash), Float(keep), lighting.rawValue, glows ? 1 : 0], more: [Float(feet.x), Float(feet.y), frame.x, frame.y],
               state: state, values: values)
