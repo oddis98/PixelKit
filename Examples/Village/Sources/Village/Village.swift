@@ -22,10 +22,10 @@ enum Tile {
 }
 
 /// A map to walk around in: the village, with clouds drifting over it; inside the house, which is dark but for its
-/// fire; or the wood through the gap in the hedge, at dusk under its canopy, lit by the player's lantern. Its objects,
-/// placed in the map editor and defined in Assets/Objects, say what's where: trees, whose trunks stop light, the house's
-/// front, its fireplace and the villager, doors with where they lead (`to`) and where you come out (`at`), and where
-/// the game starts.
+/// fire; or the wood through the gap in the hedge, at dusk in the rain under its canopy, lit by the player's lantern.
+/// Its objects, placed in the map editor and defined in Assets/Objects, say what's where: trees, whose trunks stop
+/// light, the house's front, its fireplace and the villager, doors with where they lead (`to`) and where you come out
+/// (`at`), and where the game starts.
 final class Place: Scene {
     let map: MapName
     let progress: Progress
@@ -47,9 +47,10 @@ final class Place: Scene {
         background = 0x000000
         if map == .house { (darkness, darknessColor) = (0.85, 0x1D2B53) } // a night's blue where the fire doesn't reach
         if map == .village { clouds = Clouds(cover: 0.4, shade: 0.3, size: 70, wind: [12, 5]) }
-        if map == .wood { // dusk under the trees, their leaves hanging over the view and swaying, fog drifting between them
+        if map == .wood { // dusk under the trees, their leaves hanging over the view and swaying, fog and rain between them
             (darkness, darknessColor, vignette) = (0.75, 0x1A1030, 0.7)
             fog = Fog(color: 0x8C8FA6, thickness: 0.35)
+            weather = Weather(.rain, amount: 0.8)
             overhangs = [Parallax(image: .canopy, offset: [-20, -16], sway: 1.4)]
             player.light = Light(radius: 100, color: 0xFFC27A, flicker: 0.05, shadows: true) // a lantern, which the trunks stop
         }
@@ -176,9 +177,17 @@ final class Villager: Entity, Placeable {
 }
 
 /// Lightning striking: its bolt crackling down from the sky for a moment, its flash lighting everything past daylight
-/// and throwing long shadows from the trunks, then fading; the place shakes the view and ripples the picture with it.
+/// and throwing long shadows from the trunks, then fading, and sparks flying from where it lands; the place shakes the
+/// view and ripples the picture with it.
 final class Strike: Entity {
     var age = 0.0
+    /// Thrown up from where it lands, white, then blue as they fall back and die, outlasting the flash; behind a trunk
+    /// it lands behind.
+    static let sparks = Emitter(life: 0.4...1.2, speed: 50...140, angle: -.pi / 2, spread: 2.8, gravity: [0, 170], drag: 1.2,
+                                colors: [0xFFFFFF, 0xC8D4FF, 0x6C8CFF, 0x3A3F9E])
+    /// Lingering where it landed, bigger and slower, rising a little as they cool.
+    static let embers = Emitter(life: 0.6...1.4, speed: 10...40, gravity: [0, -10], drag: 2.5,
+                                colors: [0xDDE4FF, 0x6C8CFF, 0x3A3F9E], size: 2)
 
     override init() {
         super.init()
@@ -187,6 +196,10 @@ final class Strike: Entity {
     }
 
     override func update(_ dt: Double) {
+        if age == 0 {
+            scene?.particles.burst(Strike.sparks, at: middle, count: 70)
+            scene?.particles.burst(Strike.embers, at: middle, count: 12)
+        }
         age += dt
         light?.brightness = age < 0.1 ? 2.4 : 2.4 * max(0, 1 - (age - 0.1) / 0.5) // a flash, then fading
         if age > 0.7 { scene?.remove(self) }
@@ -205,8 +218,8 @@ final class Strike: Entity {
     }
 }
 
-/// A gloom: a swirl that turns, taking the light and the color from around it, growing for half a second, lasting three,
-/// then fading.
+/// A gloom: a swirl that turns, taking the light and the color from around it, motes of violet drifting in it, growing
+/// for half a second, lasting three, then fading.
 final class Gloom: Entity {
     var age = 0.0
 
@@ -214,6 +227,7 @@ final class Gloom: Entity {
         super.init()
         hitbox = Rect(x: 0, y: 0, width: 2, height: 2)
         light = Light(radius: 45, color: 0xD9FFB3, brightness: 0, image: .swirl)
+        emitter = Emitter(life: 0.6...1.4, speed: 4...14, area: 24, drag: 1, jitter: 30, colors: [0xD2B4FF, 0x9C6BD1, 0x5A3380])
     }
 
     override func update(_ dt: Double) {
@@ -223,6 +237,7 @@ final class Gloom: Entity {
         light?.brightness = -1.3 * strength
         light?.gray = 0.9 * strength
         light?.angle += dt * 1.6
+        emitter?.rate = 60 * strength
         if age > 4 { scene?.remove(self) }
     }
 }

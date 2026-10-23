@@ -21,6 +21,12 @@ import Synchronization
         return made!
     }
     private var made: LightStates?
+    /// The particles' pipelines, made in the background as the light maps' are.
+    var particleStates: ParticleStates {
+        if madeParticles == nil { madeParticles = ParticleStates(library, format: canvasDescriptor.pixelFormat) }
+        return madeParticles!
+    }
+    private var madeParticles: ParticleStates?
     /// How many times the game's size the canvas is drawn at, a whole number: at 1 everything is on the game's whole
     /// pixels, at k on k-ths of them, so what moves between them is drawn where it is (`GameView` sets it for the screen).
     private(set) var scale = 1
@@ -48,7 +54,7 @@ import Synchronization
     /// The pass quads go to now: the canvas's, a light map's, or the drawable's.
     private(set) var current: Pass!
     private var open: MTLRenderCommandEncoder? // its encoder, begun as the first quad reaches it
-    private var drawing: MTLRenderPipelineState? // the pipeline `open` draws with
+    var drawing: MTLRenderPipelineState? // the pipeline `open` draws with, which particles' draws set too
     /// The pass's encoder, begun now if it hasn't been: a pass begun but never drawn in still clears.
     var encoder: MTLRenderCommandEncoder { open ?? opened() }
     // Queued quads, all with `batch`'s texture, pipeline and values, four for each corner: x, y, u, v; the tint r, g, b,
@@ -89,7 +95,7 @@ import Synchronization
         loader = MTKTextureLoader(device: device)
 
         let library: MTLLibrary
-        do { library = try device.makeLibrary(source: shaderCommon + shaderEngine + lightShaders, options: nil) } catch {
+        do { library = try device.makeLibrary(source: shaderCommon + shaderEngine + lightShaders + particleShaders, options: nil) } catch {
             fatalError("Spellcrest: its shaders don't compile: \(error)")
         }
         self.library = library
@@ -110,8 +116,13 @@ import Synchronization
         (canvasDescriptor, canvas) = (texture, device.makeTexture(descriptor: texture)!)
         let handed = Handed(value: (library, device))
         DispatchQueue.global(qos: .userInitiated).async {
-            let states = Handed(value: LightStates(handed.value.0, handed.value.1))
-            DispatchQueue.main.async { MainActor.assumeIsolated { if self.made == nil { self.made = states.value } } }
+            let states = Handed(value: (LightStates(handed.value.0, handed.value.1), ParticleStates(handed.value.0, format: format)))
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    if self.made == nil { self.made = states.value.0 }
+                    if self.madeParticles == nil { self.madeParticles = states.value.1 }
+                }
+            }
         }
     }
 

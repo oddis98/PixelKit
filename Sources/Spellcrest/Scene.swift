@@ -44,6 +44,12 @@ import Synchronization
     /// The game's layer shaders, from `Assets/Shaders`, run on the picture in turn after the world and its overhangs and
     /// before what's drawn after `super.draw`: a ripple, a heat haze, a wobble. Each draws once it has compiled.
     public var effects: [Shader] = []
+    /// Its particles: sparks, embers, smoke and motes, put out by its entities' `emitter`s and by
+    /// `particles.burst(_:at:count:angle:sortY:)`, moved with its updates and drawn with its world.
+    public let particles = Particles()
+    /// Rain or snow falling over its world; nil, the default, has none.
+    public var weather: Weather?
+    var drift = Vector.zero // how far the weather's wind has blown it
     var clock = 0.0 // seconds the scene has updated, for what moves: clouds, fog, swaying, shaking, shaders
     var shaking = Shake()
     var added = 0 // entities added so far, which numbers each, for its light's flicker
@@ -97,6 +103,8 @@ import Synchronization
     func advance(_ dt: Double) {
         clock += dt
         shaking.decay(dt)
+        particles.update(dt) // first, so what an update puts out is drawn where it came out
+        if let weather { drift += weather.wind * dt }
         update(dt)
     }
 
@@ -197,23 +205,34 @@ import Synchronization
         return Entity(object)
     }
 
-    /// Runs 60 times a second. Call super to update the entities.
+    /// Runs 60 times a second. Call super to update the entities and put out their emitters' particles.
     open func update(_ dt: Double) {
         for entity in entities {
             entity.update(dt)
             entity.sprite?.time += dt
             for i in entity.parts.indices { entity.parts[i].sprite.time += dt }
             entity.light?.time += dt
+            if let emitter = entity.emitter, emitter.rate > 0, entity.scene === self {
+                entity.emitted += emitter.rate * dt
+                guard entity.emitted >= 1 else { continue }
+                let due = Int(entity.emitted)
+                entity.emitted -= Double(due)
+                particles.burst(emitter, at: entity.position + entity.remainder + entity.middleOffset, count: due, sortY: entity.sortY)
+            }
         }
         tilemap?.time += dt
     }
 
     /// Call super to draw the world, then draw anything on top (like a HUD) in screen pixels. The world is its backdrops,
-    /// its tilemap, its entities, the map's layers above and the entities' parts above, in that order, then its fog and
-    /// its overhangs, lit by its light (`darkness` and the entities' `light`s, `clouds`, `vignette` and `gray`), then its
-    /// `effects`. What's drawn after it stays lit.
+    /// its tilemap, its particles on the ground and rain's splashes, its entities among its particles standing, the map's
+    /// layers above and the entities' parts above, its particles in the air and its rain or snow, in that order, then its
+    /// fog and its overhangs, lit by its light (`darkness` and the entities' `light`s, `clouds`, `vignette` and `gray`),
+    /// then its `effects`. What's drawn after it stays lit.
     open func draw(_ screen: Screen) {
-        for entity in entities { entity.place(screen.alpha) }
+        for entity in entities {
+            entity.place(screen.alpha)
+            if entity.emitter != nil { entity.shown = screen.middle(of: entity) - entity.drawnAt } // where its particles come out
+        }
         if let follow {
             let middle = follow.drawnAt + [Double(follow.hitbox.x + follow.hitbox.width / 2), Double(follow.hitbox.y + follow.hitbox.height / 2)]
             camera = Self.camera(following: middle, view: screen.size, map: tilemap?.size)
@@ -232,16 +251,22 @@ import Synchronization
         lit(.pixel)
         if let tilemap { screen.draw(tilemap, layers: tilemap.layers.indices.filter { !tilemap.above.contains($0) }) }
         let order = drawOrder, standing: Screen.Lighting = ySort ? .standing : .pixel
-        for entity in order {
+        let blown = drift - (weather?.wind ?? .zero) * (1 - screen.alpha) * Loop.step // between updates, as the time is
+        let laid = screen.lay(particles, weather: weather, drift: blown, among: order, ySort: ySort)
+        screen.draw(laid, at: 0) // on the ground
+        for (i, entity) in order.enumerated() {
+            screen.draw(laid, at: 1 + i) // standing behind it
             lit(standing, standing: entity)
             entity.draw(screen)
         }
+        screen.draw(laid, at: 1 + order.count) // standing in front of every entity
         lit(.open)
         if let tilemap, !tilemap.above.isEmpty { screen.draw(tilemap, layers: tilemap.above.sorted()) }
         for entity in order {
             lit(standing, standing: entity)
             entity.draw(screen, above: true)
         }
+        screen.draw(laid, at: 2 + order.count) // in the air
         if let fog { screen.draw(fog) }
         lit(.daylight)
         for overhang in overhangs { screen.draw(overhang) }
@@ -378,6 +403,9 @@ struct Change {
     public var object: Tilemap.Object?
     /// The light it gives off, from its middle: a torch's in the dark, a gloom's; nil gives none.
     public var light: Light?
+    /// The particles it gives off, `rate` a second, from its middle as its light shines: a torch's flame, a spell's
+    /// trail, a gloom's motes; nil gives none. They go on without it once they're out, so a trail stays where it was left.
+    public var emitter: Emitter?
     /// How deep a corner can be, in pixels, for `move(_:)` to nudge the entity around it instead of stopping: going
     /// straight left, right, up or down into something that catches no more of its hitbox than that, it slides sideways
     /// past, as top-down games since Zelda do. About 4 for a top-down game's player. 0, the default, stops it flush, as
@@ -391,6 +419,16 @@ struct Change {
     var between = Vector.zero // from `position` to where it's drawn, worked out by the scene for each frame (`place`)
     var before: Vector? // `position + remainder` as the last update started (`Scene.tick`)
     var number = 0 // its place among what its scene has added, which sets its light's flicker apart, the same each run
+    var emitted = 0.0 // the part of a particle its emitter has put out but not yet let go
+    var shown: Vector? // from `drawnAt` to its middle, as the scene last drew it
+
+    /// From its position to its middle, where its emitter's particles come out: as it was last drawn, or before that,
+    /// its sprite's frame's middle, or its hitbox's without one.
+    var middleOffset: Vector {
+        if let shown { return shown }
+        if let sprite, let frame = frameSize(sprite.image) { return [Double(frame.width), Double(frame.height)] / 2 }
+        return [Double(hitbox.x) + Double(hitbox.width) / 2, Double(hitbox.y) + Double(hitbox.height) / 2]
+    }
 
     /// An entity at (0, 0) with a 16×16 hitbox and no sprite, to subclass: set its sprite, hitbox and the rest in your
     /// `init()`.
