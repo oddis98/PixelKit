@@ -23,7 +23,8 @@ import Synchronization
     /// Clear color as 0xRRGGBB.
     public var background: UInt32 = 0x1D2B53
     /// How dark the scene is, from 0, lit (the default), to 1, as dark as `darknessColor`, where on black nothing shows
-    /// but what the entities' `light`s light: for nights, caves and houses with the lights out. What's drawn after
+    /// but what its lights light, the entities' `light`s, its `lamps` and its map's tiles that light: for nights, caves
+    /// and houses with the lights out. What's drawn after
     /// `super.draw`, like a HUD, stays lit.
     public var darkness = 0.0
     /// The color of the dark, 0xRRGGBB, which multiplies what it darkens: black (the default), or a night's deep blue.
@@ -57,6 +58,12 @@ import Synchronization
     /// haze, swirls. Set them in the scene's updates as what bends the air moves and changes; drawn after the bloom and
     /// before the `effects`.
     public var bends: [Bend] = []
+    /// How its lit sprites and tiles show which side their light is on: by normal maps beside their images, or by a rim
+    /// on sprites' edges facing it. None, the default, lights them as before.
+    public var shaping: Shaping = []
+    /// Lights where there's no entity: a torch on a wall, a flash where a spell lands. Its map's tiles that light are lit
+    /// as these are (`Tilemap.lamps`).
+    public var lamps: [Lamp] = []
     var drift = Vector.zero // how far the weather's wind has blown it
     var clock = 0.0 // seconds the scene has updated, for what moves: clouds, fog, swaying, shaking, shaders
     var shaking = Shake()
@@ -228,6 +235,7 @@ import Synchronization
                 particles.burst(emitter, at: entity.position + entity.remainder + entity.middleOffset, count: due, sortY: entity.sortY)
             }
         }
+        for i in lamps.indices { lamps[i].light.time += dt }
         tilemap?.time += dt
     }
 
@@ -247,10 +255,19 @@ import Synchronization
         }
         screen.time = clock - (1 - screen.alpha) * Loop.step // between updates, as the entities are
         screen.offset = camera + shaking.offset(at: screen.time)
-        (screen.blooming, screen.glowed) = (bloom != nil, []) // what glows is kept for the bloom as it's drawn
+        (screen.blooming, screen.glowed, screen.shaping) = (bloom != nil, [], shaping) // what glows is kept for the bloom as it's drawn
+        let tiles: [Shine] = tilemap.map { map in
+            map.lamps.enumerated().map { i, lamp in // flickering with the map's time, each as its own
+                var light = lamp.light
+                light.time = map.time
+                return Shine(middle: lamp.position + light.offset, radius: light.radius(seed: 2000 + i), light: light)
+            }
+        } ?? []
         screen.light(self, entities.compactMap { entity in
             entity.light.map { Shine(middle: screen.middle(of: entity) + $0.offset, radius: $0.radius(seed: entity.number), light: $0) }
-        })
+        } + lamps.enumerated().map { i, lamp in
+            Shine(middle: lamp.position + lamp.light.offset, radius: lamp.light.radius(seed: 1000 + i), light: lamp.light)
+        } + tiles)
         func lit(_ lighting: Screen.Lighting, standing entity: Entity? = nil) {
             screen.lighting = screen.lit ? lighting : .none
             if let entity { screen.feet = entity.drawnAt + [Double(entity.hitbox.x) + Double(entity.hitbox.width) / 2, Double(entity.hitbox.y + entity.hitbox.height) - 0.5] }
@@ -283,7 +300,7 @@ import Synchronization
         screen.bloom(bloom, laid)
         screen.bend(bends)
         screen.apply(effects)
-        screen.offset = .zero
+        (screen.offset, screen.shaping) = (.zero, [])
     }
 
     /// The order the entities draw in: as they were added, or with `ySort` by `sortY`, ties as they were added.
@@ -718,6 +735,10 @@ public struct Tilemap: Sendable {
     var sheet: SheetFile?
     /// Things placed in the level with the map editor's Objects tool, like coins or where the player starts.
     public var objects: [Object] = []
+    /// The lights its tiles give by their tileset's properties, each at its tile's middle: `light`, how far it reaches in
+    /// pixels, which lights it, and `lightColor`, `lightFlicker`, `lightBrightness` and `lightShadows`, as a `Light`'s,
+    /// set in the map editor's tile panel. A torch painted on a wall lights it. The scene lights them as its `lamps`.
+    public internal(set) var lamps: [Lamp] = []
     var names: [String] = [] // each layer's, as the map editor named it
     var name: String? // the .tilemap it came from
     var watched: [String] = [] // it, the tileset's .json and its objects' definitions
@@ -832,6 +853,7 @@ public struct Tilemap: Sendable {
         for (cell, tile) in edits where layers.indices.contains(cell.x) && (0..<width).contains(cell.y) && (0..<height).contains(cell.z) {
             layers[cell.x][cell.z * width + cell.y] = tile
         }
+        findLamps()
     }
 
     /// Loads the map again if its files changed. One that can't be read keeps the map as it is.
@@ -861,6 +883,7 @@ public struct Tilemap: Sendable {
             do { sheet = try SheetFile(contentsOf: url) } catch { print("Spellcrest: can't read \(url.path): \(error.localizedDescription)") }
         }
         opaque = Set(sheet?.opaque ?? [])
+        findLamps()
     }
 
     /// Size in pixels.
@@ -894,8 +917,10 @@ public struct Tilemap: Sendable {
     /// wall. Outside the map it does nothing. The change stays when the map reloads as it's edited in the editor.
     public mutating func setTile(_ tile: Int?, at point: Vector, layer: Int) {
         guard let i = index(point), layers.indices.contains(layer) else { return }
+        let old = layers[layer][i]
         layers[layer][i] = tile
         edits.updateValue(tile, forKey: [layer, i % width, i / width]) // not `edits[…] = tile`, which removes it when nil
+        if old.flatMap(light(of:)) != nil || tile.flatMap(light(of:)) != nil { findLamps() } // a torch put up or taken down
     }
 
     /// The cell world pixel `point` is in, as an index into a layer; nil outside the map.
@@ -929,6 +954,7 @@ public struct Tilemap: Sendable {
                 found.append([Double(i % width * tileSize), Double(i / width * tileSize)])
             }
         }
+        if !found.isEmpty, light(of: tile) != nil { findLamps() }
         return found
     }
 

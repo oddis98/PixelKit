@@ -1,8 +1,8 @@
 import MetalKit
 
-/// The light an entity gives off (`Entity.light`), from its middle: a torch, a fireplace, a lantern or a glowing
-/// mushroom in a dark scene (`Scene.darkness`), a fireball's glow by day, or, taking light away, a gloom. Where lights
-/// meet, they add up.
+/// The light an entity gives off (`Entity.light`), from its middle, or a lamp where there's none (`Scene.lamps`): a
+/// torch, a fireplace, a lantern or a glowing mushroom in a dark scene (`Scene.darkness`), a fireball's glow by day,
+/// or, taking light away, a gloom. Where lights meet, they add up.
 public struct Light: Sendable {
     /// How far it reaches, in pixels: it's brightest in the middle and fades to nothing there.
     public var radius: Double
@@ -110,15 +110,19 @@ struct Shine {
 /// daylight the clouds leave, apart from the light, so they can be read between the game's pixels while it's sharp.
 struct LightMaps {
     let shadowed, open, fog, clouds: MTLTexture
+    let direction: MTLTexture // where the light at each texel comes from, for a scene that shapes its light (`Scene.shaping`)
 }
 
 /// The light maps' pipelines: a light added or taken away, the cap at daylight, the vignette multiplied, what's opaque
 /// into the mask, the fog's thickness into its map, and the clouds into theirs.
 struct LightStates {
     let add, take, cap, clouds, vignette, mask, fog: MTLRenderPipelineState
+    /// The same for a scene that shapes its light, the direction map a third: only a light that adds light says where
+    /// it comes from; one taking it away, the cap and the vignette leave the map alone.
+    let shapedAdd, shapedTake, shapedCap, shapedVignette: MTLRenderPipelineState
 
     init(_ library: MTLLibrary, _ device: MTLDevice) {
-        let maps: [MTLPixelFormat] = [.rgba16Float, .rgba16Float]
+        let maps: [MTLPixelFormat] = [.rgba16Float, .rgba16Float], shaped = maps + [.rgba16Float]
         add = makeState(library, "lightFragment", formats: maps, rgb: (.one, .one), alpha: (.one, .one))
         take = makeState(library, "lightFragment", formats: maps, rgb: (.one, .one), alpha: (.one, .one), operation: (.reverseSubtract, .add))
         cap = makeState(library, "capFragment", formats: maps, rgb: (.one, .one), alpha: (.one, .one), operation: (.min, .min))
@@ -126,6 +130,12 @@ struct LightStates {
         vignette = makeState(library, "vignetteFragment", formats: maps, rgb: (.destinationColor, .zero), alpha: (.destinationAlpha, .zero))
         mask = makeState(library, "maskFragment", formats: [.r8Unorm], rgb: (.one, .zero), alpha: (.one, .zero))
         fog = makeState(library, "fogNoiseFragment", formats: [.r8Unorm], rgb: (.one, .zero), alpha: (.one, .zero))
+        shapedAdd = makeState(library, "shapedLightFragment", formats: shaped, rgb: (.one, .one), alpha: (.one, .one))
+        shapedTake = makeState(library, "lightFragment", formats: shaped, rgb: (.one, .one), alpha: (.one, .one), operation: (.reverseSubtract, .add),
+                               masked: [2])
+        shapedCap = makeState(library, "capFragment", formats: shaped, rgb: (.one, .one), alpha: (.one, .one), operation: (.min, .min), masked: [2])
+        shapedVignette = makeState(library, "vignetteFragment", formats: shaped, rgb: (.destinationColor, .zero), alpha: (.destinationAlpha, .zero),
+                                   masked: [2])
     }
 }
 
@@ -133,9 +143,10 @@ extension Screen {
     /// Works out the light the scene's world is drawn in, before it's drawn, if anything lights it: darkness, clouds, fog,
     /// a vignette, gray, or a light that shows (any in the dark or under clouds; by day only one past daylight, taking
     /// light away or graying). It ends the canvas's pass if that's begun, draws what's opaque into the mask if a light
-    /// that shows casts shadows, the clouds' map, the two light maps and the fog's, then goes on with the canvas, the maps
-    /// bound for every quad to read as `lighting` says. The maps have a texel for each world pixel the view shows, from `offset` rounded
-    /// down, so they stay on the ground as the camera moves between pixels, and cost the same at any `scale`.
+    /// that shows casts shadows, the clouds' map, the two light maps and the fog's, and with `shaping` the way to the
+    /// lights, then goes on with the canvas, the maps bound for every quad to read as `lighting` says. The maps have a
+    /// texel for each world pixel the view shows, from `offset` rounded down, so they stay on the ground as the camera
+    /// moves between pixels, and cost the same at any `scale`.
     func light(_ scene: Scene, _ lights: [Shine]) {
         (lit, pastDaylight) = (false, nil)
         let dark = min(max(scene.darkness, 0), 1)
@@ -146,6 +157,7 @@ extension Screen {
             return r > 0 && (dim || b > 1 || b < 0 || shine.light.gray > 0)
                 && m.x + r > 0 && m.y + r > 0 && m.x - r < Double(size.width) && m.y - r < Double(size.height)
         }
+        if shown.isEmpty { shaping = [] } // no light to turn toward, as by day: nothing's shaped, and that costs nothing
         guard dim || scene.gray > 0 || scene.clouds != nil || scene.fog != nil || scene.vignette > 0 || !shown.isEmpty else { return }
         pastDaylight = shown.filter { $0.light.brightness > 1 }.reduce(nil) { box, shine in // in the view's pixels
             let (m, r) = (shine.middle - offset, shine.radius)
@@ -212,7 +224,15 @@ extension Screen {
             let gray = i == 0 ? min(max(scene.gray, 0), 1) : 1 // and the open one's vignette
             pass.colorAttachments[i].clearColor = MTLClearColor(red: Double(ambient.x), green: Double(ambient.y), blue: Double(ambient.z), alpha: gray)
         }
-        go(Pass(descriptor: pass, usual: states.add, size: size, textures: [mask ?? white]))
+        let shaping = !self.shaping.isEmpty // and where the light comes from, which it shows
+        if shaping {
+            pass.colorAttachments[2].texture = maps.direction
+            pass.colorAttachments[2].loadAction = .clear
+            pass.colorAttachments[2].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+        }
+        let (add, take, cap, vignette) = shaping ? (states.shapedAdd, states.shapedTake, states.shapedCap, states.shapedVignette)
+                                                 : (states.add, states.take, states.cap, states.vignette)
+        go(Pass(descriptor: pass, usual: add, size: size, textures: [mask ?? white]))
         func glow(_ shine: Shine, _ much: Double, gray: Double, state: MTLRenderPipelineState? = nil) {
             let (m, r, light) = (shine.middle - origin, shine.radius, shine.light)
             let color = tint(light.color) * Float(much)
@@ -222,10 +242,10 @@ extension Screen {
                   more: [Float(light.angle), light.image == nil ? 0 : 1, Float(margin), 0], state: state)
         }
         for shine in shown where shine.light.brightness > 0 { glow(shine, min(shine.light.brightness, 1), gray: shine.light.gray) }
-        queue(scene.clouds == nil ? white : maps.clouds, whole, state: states.cap)
+        queue(scene.clouds == nil ? white : maps.clouds, whole, state: cap)
         for shine in shown where shine.light.brightness > 1 { glow(shine, shine.light.brightness - 1, gray: 0) }
-        for shine in shown where shine.light.brightness <= 0 { glow(shine, -shine.light.brightness, gray: shine.light.gray, state: states.take) }
-        if scene.vignette > 0 { queue(white, whole, effects: [Float(min(scene.vignette, 1)), 0, 0, 0], state: states.vignette) }
+        for shine in shown where shine.light.brightness <= 0 { glow(shine, -shine.light.brightness, gray: shine.light.gray, state: take) }
+        if scene.vignette > 0 { queue(white, whole, effects: [Float(min(scene.vignette, 1)), 0, 0, 0], state: vignette) }
         end()
 
         // How thick the fog is.
@@ -240,7 +260,7 @@ extension Screen {
             end()
         }
 
-        canvas.textures = [maps.shadowed, maps.open, scene.clouds == nil ? white : maps.clouds]
+        canvas.textures = [maps.shadowed, maps.open, scene.clouds == nil ? white : maps.clouds, shaping ? maps.direction : white]
         go(canvas)
         self.lit = true
     }
@@ -259,7 +279,8 @@ extension Screen {
             (texture.usage, texture.storageMode) = ([.renderTarget, .shaderRead], .private)
             return device.makeTexture(descriptor: texture)!
         }
-        maps = LightMaps(shadowed: texture(.rgba16Float), open: texture(.rgba16Float), fog: texture(.r8Unorm), clouds: texture(.r8Unorm))
+        maps = LightMaps(shadowed: texture(.rgba16Float), open: texture(.rgba16Float), fog: texture(.r8Unorm), clouds: texture(.r8Unorm),
+                         direction: texture(.rgba16Float))
         return maps!
     }
 
@@ -280,6 +301,7 @@ extension Screen {
 // middle, and the texel's world pixel is its floor plus `view.origin`.
 let lightShaders = """
 struct Maps { float4 shadowed [[color(0)]]; float4 open [[color(1)]]; };
+struct ShapedMaps { float4 shadowed [[color(0)]]; float4 open [[color(1)]]; float4 direction [[color(2)]]; };
 
 // Whether light gets to the texel at `from` from its middle, `to`, both in the mask's texels, without going through
 // what's opaque. It leaves out the opaque area it starts in, so a wall lights its own face, and one that reaches the
@@ -302,7 +324,7 @@ float through(texture2d<float> mask, float2 from, float2 to) {
 // A light, added to the maps or taken from them: its color times how much (color.rgb) and how gray (color.a), from its
 // middle (effects.xy) out to its radius (effects.z), round or shaped by an image (texture 0, if more.y) turned by an
 // angle (more.x); with shadows (effects.w), only where it gets through the mask (texture 1, more.z texels wider each way).
-fragment Maps lightFragment(Vertex in [[stage_in]], texture2d<float> shape [[texture(0)]], texture2d<float> mask [[texture(1)]]) {
+ShapedMaps light(Vertex in, texture2d<float> shape, texture2d<float> mask) {
     float2 d = (in.position.xy - in.effects.xy) / in.effects.z;
     float glow;
     if (in.more.y > 0.5) {
@@ -317,7 +339,19 @@ fragment Maps lightFragment(Vertex in [[stage_in]], texture2d<float> shape [[tex
     if (glow <= 0) discard_fragment();
     float seen = in.effects.w > 0.5 ? through(mask, in.position.xy + in.more.z, in.effects.xy + in.more.z) : 1;
     float3 light = in.color.rgb * glow;
-    return { float4(light * seen, in.color.a * glow), float4(light, 0) };
+    // And the way to it, weighted by how much of it gets here, for a scene that shapes its light.
+    float weight = max(light.r, max(light.g, light.b)) * seen;
+    float2 toward = length(d) > 0.0001 ? -normalize(d) : float2(0);
+    return { float4(light * seen, in.color.a * glow), float4(light, 0), float4(toward * weight, weight, 0) };
+}
+
+fragment Maps lightFragment(Vertex in [[stage_in]], texture2d<float> shape [[texture(0)]], texture2d<float> mask [[texture(1)]]) {
+    ShapedMaps maps = light(in, shape, mask);
+    return { maps.shadowed, maps.open };
+}
+
+fragment ShapedMaps shapedLightFragment(Vertex in [[stage_in]], texture2d<float> shape [[texture(0)]], texture2d<float> mask [[texture(1)]]) {
+    return light(in, shape, mask);
 }
 
 // The light capped at daylight (blended with min), so a light no brighter than 1 shows nothing by day: at 1, and under

@@ -185,7 +185,7 @@ extension Screen {
             through.colorAttachments[0].loadAction = .dontCare
             go(Pass(descriptor: through, usual: states.through, grid: Double(scale), size: size))
             queue(self.canvas, view)
-            encoder.setFragmentTexture(map, index: 4)
+            encoder.setFragmentTexture(map, index: 6)
             end()
             turnOver()
             canvas.descriptor.colorAttachments[0].texture = self.canvas
@@ -210,7 +210,7 @@ extension Screen {
             blit.endEncoding()
         }
         for box in boxes { queue(spare, box, state: states.through) }
-        encoder.setFragmentTexture(map, index: 4)
+        encoder.setFragmentTexture(map, index: 6)
         flush()
     }
 }
@@ -267,8 +267,8 @@ fragment float4 bendFragment(Vertex in [[stage_in]]) {
     return float4(moved, 0, 1);
 }
 
-// The canvas's copy (texture 0) through the bends' map (texture 4): each pixel from where its bends move it.
-fragment float4 throughFragment(Vertex in [[stage_in]], texture2d<float> picture [[texture(0)]], texture2d<float> bends [[texture(4)]],
+// The canvas's copy (texture 0) through the bends' map (texture 6): each pixel from where its bends move it.
+fragment float4 throughFragment(Vertex in [[stage_in]], texture2d<float> picture [[texture(0)]], texture2d<float> bends [[texture(6)]],
                                 constant View &view [[buffer(0)]]) {
     float2 p = in.position.xy / view.scale;
     float2 moved = bends.read(uint2(clamp(p, float2(0), float2(bends.get_width() - 1, bends.get_height() - 1)))).xy;

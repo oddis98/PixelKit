@@ -25,8 +25,9 @@ enum Tile {
 /// fire; or the wood through the gap in the hedge, at dusk in the rain under its canopy, lit by the player's lantern.
 /// Its objects, placed in the map editor and defined in Assets/Objects, say what's where: trees, whose trunks stop
 /// light, the house's front, its fireplace and the villager, doors with where they lead (`to`) and where you come out
-/// (`at`), and where the game starts. What glows blooms, spilling into the dark round it, and the air bends round a
-/// gloom and over the fire.
+/// (`at`), and where the game starts. What glows blooms, spilling into the dark round it, the air bends round a gloom
+/// and over the fire, and the light shows which side it's on: the house's torches, painted on its walls, the lantern
+/// in the wood, and lightning.
 final class Place: Scene {
     let map: MapName
     let progress: Progress
@@ -47,6 +48,7 @@ final class Place: Scene {
         follow = player // the camera keeps them in the middle, and a door's iris closes on them
         background = 0x000000
         bloom = Bloom() // the lightning, its sparks and the gloom's motes spilling past their pixels
+        shaping = [.normals, .rim] // the tiles and the trees by their normal maps, everyone else's edges, toward their lights
         if map == .house { (darkness, darknessColor) = (0.85, 0x1D2B53) } // a night's blue where the fire doesn't reach
         if map == .village { clouds = Clouds(cover: 0.4, shade: 0.3, size: 70, wind: [12, 5]) }
         if map == .wood { // dusk under the trees, their leaves hanging over the view and swaying, fog and rain between them

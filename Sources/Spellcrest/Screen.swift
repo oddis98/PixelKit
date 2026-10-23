@@ -71,7 +71,9 @@ import Synchronization
     // Queued quads, all with `batch`'s texture, pipeline and values, four for each corner: x, y, u, v; the tint r, g, b,
     // a; and what the fragments make of it (`Corner` in the shaders).
     var vertices: [SIMD4<Float>] = []
-    var batch: (texture: MTLTexture, state: MTLRenderPipelineState, values: [Float]?)?
+    var batch: (texture: MTLTexture, state: MTLRenderPipelineState, values: [Float]?, normals: MTLTexture?)?
+    /// How the scene being drawn shapes its light, which lit sprites and tiles show (`Scene.shaping`).
+    var shaping: Shaping = []
     /// The built-in font's glyphs, made on first use.
     lazy var builtInFont = Font.builtInTexture(device)
     /// One white pixel, which `fill` stretches and tints.
@@ -106,7 +108,7 @@ import Synchronization
         loader = MTKTextureLoader(device: device)
 
         let library: MTLLibrary
-        do { library = try device.makeLibrary(source: shaderCommon + shaderEngine + lightShaders + particleShaders + glowShaders, options: nil) } catch {
+        do { library = try device.makeLibrary(source: shaderCommon + shapingShaders + shaderEngine + lightShaders + particleShaders + glowShaders, options: nil) } catch {
             fatalError("Spellcrest: its shaders don't compile: \(error)")
         }
         self.library = library
@@ -186,9 +188,12 @@ import Synchronization
         if let shader = sprite.shader, let made = self.shader(shader.name.name, .color) {
             (state, values) = (sprite.glows ? made.glowing : made.state, self.values(shader))
         }
+        // Lit and shaping its light: turned toward it by its normal map if it has one, or else by a rim on its edges.
+        let shaped = !shaping.isEmpty && lighting != .none && !sprite.glows && sprite.shader == nil
+        let normals = shaped && shaping.contains(.normals) ? normalMap(sprite.image) : nil, rim = shaped && normals == nil && shaping.contains(.rim)
         quad(texture, x: x, y: y, source: source, size: Size(source.width * scale, source.height * scale), flip: sprite.flipped,
              color: sprite.color, opacity: sprite.opacity, flash: sprite.flash, glows: sprite.glows, state: state, values: values,
-             frame: [Float(source.x), Float(source.y)])
+             frame: rim ? [Float(source.width), Float(source.height)] : [Float(source.x), Float(source.y)], normals: normals, rim: rim)
     }
 
     /// The size of one of the game's images: a frame's, if its `.json` cuts it into frames, else the whole image's;
@@ -205,6 +210,7 @@ import Synchronization
     /// levels can be many screens big. `Scene` draws its `tilemap` this way, the layers `above` after the entities.
     public func draw(_ map: Tilemap, layers: [Int]? = nil) {
         let texture = texture(map.tileset)
+        let normals = shaping.contains(.normals) && lighting != .none ? normalMap(map.tileset) : nil // its tileset's, when it shapes its light
         let tile = Size(map.tileSize, map.tileSize)
         let frames = map.frames(sheet(map.tileset)?.animations)
         // The world pixels the canvas shows any of, the camera on them or between them.
@@ -216,7 +222,8 @@ import Synchronization
             for row in rows {
                 for column in columns {
                     guard let cell = map.layers[layer][row * map.width + column] else { continue }
-                    quad(texture, x: Double(column * map.tileSize), y: Double(row * map.tileSize), source: region(frames[cell] ?? cell, tile, in: texture))
+                    quad(texture, x: Double(column * map.tileSize), y: Double(row * map.tileSize), source: region(frames[cell] ?? cell, tile, in: texture),
+                         normals: normals)
                 }
             }
         }
@@ -338,10 +345,11 @@ import Synchronization
     /// pixels multiplied by `color` (0xRRGGBB, where white leaves them as they are) and `opacity`, then mixed toward
     /// white by `flash`; of a dissolve's 4x4 pattern, only the share `keep` of its pixels draw. It's lit as `lighting`
     /// says, unless it `glows`, through `state` with `values` (a game's shader), or the pass's usual pipeline. `frame` is
-    /// where a sprite's frame is in the texture, for a shader's positions.
+    /// where a sprite's frame is in the texture, for a shader's positions, or with a `rim`, its size. Lit, it turns toward
+    /// its light by its `normals`, a normal map, or by a `rim` on its edges.
     func quad(_ texture: MTLTexture, x: Double, y: Double, source s: Rect, size: Size? = nil, flip: Bool = false, color: UInt32 = 0xFFFFFF,
               opacity: Double = 1, flash: Double = 0, keep: Double = 1, glows: Bool = false, state: MTLRenderPipelineState? = nil,
-              values: [Float]? = nil, frame: SIMD2<Float> = .zero) {
+              values: [Float]? = nil, frame: SIMD2<Float> = .zero, normals: MTLTexture? = nil, rim: Bool = false) {
         let k = current?.grid ?? Double(scale) // corners on k-ths of a pixel, so whole pixels stay whole and the rest lands between
         let x0 = Float(((x - offset.x) * k).rounded(.down) / k), y0 = Float(((y - offset.y) * k).rounded(.down) / k)
         let (x1, y1) = (x0 + Float(size?.width ?? s.width), y0 + Float(size?.height ?? s.height))
@@ -350,20 +358,22 @@ import Synchronization
         let (v0, v1) = (Float(s.y) / h, Float(s.y + s.height) / h)
         if flip { swap(&u0, &u1) }
         if glows && blooming { glowed.append(Glowed(texture: texture, box: [x0, y0, x1, y1], uv: [u0, v0, u1, v1], color: tint(color, opacity), flash: Float(flash))) }
+        let lit = lighting != .none && !glows, shape: Float = glows ? 1 : !lit ? 0 : normals != nil ? 2 : rim ? 3 : 0 // how it's drawn
         queue(texture, [x0, y0, x1, y1], uv: [u0, v0, u1, v1], color: tint(color, opacity),
-              effects: [Float(flash), Float(keep), lighting.rawValue, glows ? 1 : 0], more: [Float(feet.x), Float(feet.y), frame.x, frame.y],
-              state: state, values: values)
+              effects: [Float(flash), Float(keep), lighting.rawValue, shape], more: [Float(feet.x), Float(feet.y), frame.x, frame.y],
+              state: state, values: values, normals: lit ? normals : nil)
     }
 
     /// Queues a quad over `box`, from x0, y0 to x1, y1 in the pass's units, its texture coordinates `uv` the same way, and
     /// the rest of its corners as given. Consecutive quads with the same texture, pipeline and values reach the GPU as
     /// one draw call.
     func queue(_ texture: MTLTexture, _ box: SIMD4<Float>, uv: SIMD4<Float> = [0, 0, 1, 1], color: SIMD4<Float> = [1, 1, 1, 1],
-               effects: SIMD4<Float> = [0, 1, 0, 0], more: SIMD4<Float> = .zero, state: MTLRenderPipelineState? = nil, values: [Float]? = nil) {
+               effects: SIMD4<Float> = [0, 1, 0, 0], more: SIMD4<Float> = .zero, state: MTLRenderPipelineState? = nil, values: [Float]? = nil,
+               normals: MTLTexture? = nil) {
         let state = state ?? current?.usual ?? pipeline
-        if texture !== batch?.texture || state !== batch?.state || values != batch?.values {
+        if texture !== batch?.texture || state !== batch?.state || values != batch?.values || normals !== batch?.normals {
             flush()
-            batch = (texture, state, values)
+            batch = (texture, state, values, normals)
         }
         let (x0, y0, x1, y1, u0, v0, u1, v1) = (box[0], box[1], box[2], box[3], uv[0], uv[1], uv[2], uv[3])
         for corner in [[x0, y0, u0, v0], [x1, y0, u1, v0], [x0, y1, u0, v1], [x1, y0, u1, v0], [x1, y1, u1, v1], [x0, y1, u0, v1]] as [SIMD4<Float>] {
@@ -381,6 +391,7 @@ import Synchronization
             let buffer = device.makeBuffer(bytes: vertices, length: vertices.count * MemoryLayout<SIMD4<Float>>.stride)
             encoder.setVertexBuffer(buffer, offset: 0, index: 0)
             encoder.setFragmentTexture(batch.texture, index: 0)
+            encoder.setFragmentTexture(batch.normals ?? white, index: 5) // its normal map, for light that shapes it
             if let values = batch.values { encoder.setFragmentBytes(values, length: values.count * MemoryLayout<Float>.stride, index: 1) }
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: vertices.count / 4)
         }
@@ -392,7 +403,7 @@ import Synchronization
     func begin(_ commands: MTLCommandBuffer, _ descriptor: MTLRenderPassDescriptor, _ state: MTLRenderPipelineState? = nil) {
         self.commands = commands
         (lit, view) = (false, makeView(origin: .zero, maps: Size(1, 1), ambient: [1, 1, 1]))
-        go(Pass(descriptor: descriptor, usual: state ?? pipeline, grid: Double(scale), size: size, textures: [white, white, white]))
+        go(Pass(descriptor: descriptor, usual: state ?? pipeline, grid: Double(scale), size: size, textures: [white, white, white, white]))
     }
 
     /// Ends the pass under way, if it's begun, keeping what it drew, and goes on with `pass`, which begins as the first
@@ -471,9 +482,10 @@ import Synchronization
 }
 
 /// A pipeline from `library`'s `vertex` and `fragment` functions, drawing into textures of `formats`, each blended the
-/// same way: `rgb`'s and `alpha`'s factors, with `operation`.
+/// same way: `rgb`'s and `alpha`'s factors, with `operation`; those `masked` it leaves as they are.
 func makeState(_ library: MTLLibrary, _ fragment: String, vertex: String = "spriteVertex", formats: [MTLPixelFormat], rgb: (MTLBlendFactor, MTLBlendFactor),
-               alpha: (MTLBlendFactor, MTLBlendFactor), operation: (rgb: MTLBlendOperation, alpha: MTLBlendOperation) = (.add, .add)) -> MTLRenderPipelineState {
+               alpha: (MTLBlendFactor, MTLBlendFactor), operation: (rgb: MTLBlendOperation, alpha: MTLBlendOperation) = (.add, .add),
+               masked: [Int] = []) -> MTLRenderPipelineState {
     let pipeline = MTLRenderPipelineDescriptor()
     pipeline.vertexFunction = library.makeFunction(name: vertex)
     pipeline.fragmentFunction = library.makeFunction(name: fragment)
@@ -484,6 +496,7 @@ func makeState(_ library: MTLLibrary, _ fragment: String, vertex: String = "spri
         (color.sourceRGBBlendFactor, color.destinationRGBBlendFactor) = rgb
         (color.sourceAlphaBlendFactor, color.destinationAlphaBlendFactor) = alpha
         (color.rgbBlendOperation, color.alphaBlendOperation) = operation
+        if masked.contains(i) { color.writeMask = [] }
     }
     do { return try library.device.makeRenderPipelineState(descriptor: pipeline) } catch {
         fatalError("Spellcrest: can't make the pipeline for \(fragment): \(error)")
@@ -693,12 +706,16 @@ let shaderEngine = """
 // A sprite, a tile, text or a fill: its texture's pixel times its color, mixed toward white by a flash, dropped in a
 // dissolve's pattern but for the share to keep, and lit as it says.
 fragment float4 spriteFragment(Vertex in [[stage_in]], texture2d<float> t [[texture(0)]], texture2d<float> shadowed [[texture(1)]],
-                               texture2d<float> open [[texture(2)]], texture2d<float> clouds [[texture(3)]], constant View &view [[buffer(0)]]) {
+                               texture2d<float> open [[texture(2)]], texture2d<float> clouds [[texture(3)]], texture2d<float> direction [[texture(4)]],
+                               texture2d<float> normals [[texture(5)]], constant View &view [[buffer(0)]]) {
     if (order(in.position.xy / view.scale) >= in.effects.y) discard_fragment(); // the game's pixels, at any scale
     constexpr sampler nearest(filter::nearest);
     float4 c = t.sample(nearest, in.uv) * in.color;
     float3 rgb = mix(c.rgb, float3(1), saturate(in.effects.x));
-    return float4(lit(rgb, in.effects.z, in.shade, in.position.xy, view, shadowed, open, clouds), c.a);
+    float3 out = lit(rgb, in.effects.z, in.shade, in.position.xy, view, shadowed, open, clouds);
+    float flip = dfdx(in.uv.x) < 0 ? -1 : 1; // mirrored, its texture's left is the screen's right
+    if (in.effects.w > 1.5) out = shaped(out, in.effects.w < 2.5, in.uv, flip, in.more.zw, in.position.xy, t, normals, direction, view); // 2 normal map, 3 rim
+    return float4(out, c.a);
 }
 
 // A sprite that glows, added to what's under it and unlit: fire, magic, sparks.

@@ -1,1 +1,1 @@
-{"animations":{"6":{"fps":4,"frames":[6,7,8,7]}},"frameHeight":16,"frameWidth":16,"solid":[4,6,16,19]}
+{"animations":{"24":{"fps":8,"frames":[24,25,26,25]},"6":{"fps":4,"frames":[6,7,8,7]}},"frameHeight":16,"frameWidth":16,"properties":[{"name":"light","type":"number"},{"name":"lightColor","type":"color","value":"#FFFFFF"},{"name":"lightFlicker","type":"number"},{"name":"lightBrightness","type":"number","value":"1"},{"name":"lightShadows","type":"toggle"}],"solid":[4,6,16,19],"tiles":{"24":{"light":"56","lightColor":"#FFA040","lightFlicker":"0.12"}}}
