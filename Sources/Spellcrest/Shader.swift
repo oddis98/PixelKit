@@ -83,25 +83,31 @@ extension Screen {
         shaders[key]?.compiling = true
         let format = canvas.pixelFormat
         device.makeLibrary(source: shaderSource(text, name: key.name, path: url.path, kind: key.kind), options: nil) { library, error in
-            var made: Compiled?
-            if let library {
-                let blend: (MTLBlendFactor, MTLBlendFactor) = key.kind == .color ? (.sourceAlpha, .oneMinusSourceAlpha) : (.one, .zero)
-                let entry = key.kind == .color ? "spellcrestColor" : "spellcrestLayer"
-                let vertex = key.kind == .color ? "litVertex" : "spriteVertex" // a sprite's lit as the engine's are
-                made = Compiled(state: makeState(library, entry, vertex: vertex, formats: [format], rgb: blend,
-                                                 alpha: key.kind == .color ? (.one, .oneMinusSourceAlpha) : (.one, .zero)),
-                                glowing: key.kind == .color ? makeState(library, entry, vertex: vertex, formats: [format], rgb: (.one, .one), alpha: (.zero, .one)) : nil)
-            }
-            let handed = Handed(value: made), problem = error.map { "\($0.localizedDescription)" }
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    // Its errors, or that it compiles once more after them, so the editor drops errors printed for an
-                    // older save, which may finish compiling after the one that fixed them.
-                    if let problem { print(problem.trimmingCharacters(in: .whitespacesAndNewlines)) }
-                    else if self.shaders[key]?.failed == true { print("Spellcrest: \(url.path) compiles again") }
-                    var compiled = handed.value ?? Compiled()
-                    (compiled.modified, compiled.compiling, compiled.failed) = (modified, false, problem != nil)
-                    self.shaders[key] = compiled
+            // Its pipelines are made on a queue of their own once Metal's callback is done with: made in the callback, a
+            // pipeline can wait on the queue the callback runs on, which trapped in the iOS 27 simulator now and then
+            // (`__DISPATCH_WAIT_FOR_QUEUE__`) when two shaders compiled at once, as an app's do as it starts.
+            let compiledLibrary = Handed(value: library), problem = error.map { "\($0.localizedDescription)" }
+            DispatchQueue.global(qos: .userInitiated).async {
+                var made: Compiled?
+                if let library = compiledLibrary.value {
+                    let blend: (MTLBlendFactor, MTLBlendFactor) = key.kind == .color ? (.sourceAlpha, .oneMinusSourceAlpha) : (.one, .zero)
+                    let entry = key.kind == .color ? "spellcrestColor" : "spellcrestLayer"
+                    let vertex = key.kind == .color ? "litVertex" : "spriteVertex" // a sprite's lit as the engine's are
+                    made = Compiled(state: makeState(library, entry, vertex: vertex, formats: [format], rgb: blend,
+                                                     alpha: key.kind == .color ? (.one, .oneMinusSourceAlpha) : (.one, .zero)),
+                                    glowing: key.kind == .color ? makeState(library, entry, vertex: vertex, formats: [format], rgb: (.one, .one), alpha: (.zero, .one)) : nil)
+                }
+                let handed = Handed(value: made)
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        // Its errors, or that it compiles once more after them, so the editor drops errors printed for an
+                        // older save, which may finish compiling after the one that fixed them.
+                        if let problem { print(problem.trimmingCharacters(in: .whitespacesAndNewlines)) }
+                        else if self.shaders[key]?.failed == true { print("Spellcrest: \(url.path) compiles again") }
+                        var compiled = handed.value ?? Compiled()
+                        (compiled.modified, compiled.compiling, compiled.failed) = (modified, false, problem != nil)
+                        self.shaders[key] = compiled
+                    }
                 }
             }
         }
