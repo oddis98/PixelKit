@@ -760,7 +760,8 @@ fragment float4 fogFragment(Vertex in [[stage_in]], texture2d<float> fog [[textu
 """
 
 /// Where a game file, `<name>.<extension>`, is: anywhere in `Assets`, at the top first, then in its folders by path, so
-/// games keep their sprites, maps and sounds in folders and find them by name. `Assets` is inside the app once the game
+/// games keep their sprites, maps and sounds in folders and find them by name. `Assets/Parts`, a kit of the parts
+/// people are made of (`KitFile`), isn't looked in: a game draws the people, so a part's name can't hide a sprite's. `Assets` is inside the app once the game
 /// has been exported, otherwise in the folder the game runs in (the editor runs games in their project folder).
 /// A file that isn't where it was, or wasn't there, is looked for again once a folder in `Assets` has changed, which is
 /// looked at no more than once a second (the loop checks loaded files 4 times a second), so files added or moved while
@@ -821,6 +822,7 @@ struct AssetIndex {
     mutating func build(_ root: URL) {
         let paths = (FileManager.default.subpaths(atPath: root.path) ?? [])
             .filter { !$0.split(separator: "/").contains { $0.hasPrefix(".") } } // the editor's, like an image's layers
+            .filter { $0 != "Parts" && !$0.hasPrefix("Parts/") } // a kit's parts, which people are made of, not drawn
             .sorted { ($0.contains("/") ? 1 : 0, $0) < ($1.contains("/") ? 1 : 0, $1) }
         (self.root, files, folders, checked) = (root, [:], [(root, modificationDate(root))], Date())
         for path in paths {

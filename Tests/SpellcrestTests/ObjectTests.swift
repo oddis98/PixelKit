@@ -7,12 +7,13 @@ import Testing
 
 @MainActor @Test func assetsAreFoundByNameInTheirFoldersAtTheTopFirstAndWhenAddedOrMoved() throws {
     let game = FileManager.default.temporaryDirectory.appending(path: "assets-\(UUID())")
-    for path in ["Sprites/Enemies/bat.png", "Sprites/slime.png", "slime.png", "Maps/b/level.tilemap", "Maps/a/level.tilemap", ".hidden/x.png"] {
+    for path in ["Sprites/Enemies/bat.png", "Sprites/slime.png", "slime.png", "Maps/b/level.tilemap", "Maps/a/level.tilemap", ".hidden/x.png",
+                 "Parts/hat/bat.png"] {
         try FileManager.default.createDirectory(at: game.appending(path: "Assets/\(path)").deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data().write(to: game.appending(path: "Assets/\(path)"))
     }
     FileManager.default.changeCurrentDirectoryPath(game.path) // games load Assets/ relative to here
-    #expect(assetURL("bat.png").path.hasSuffix("/Assets/Sprites/Enemies/bat.png"))
+    #expect(assetURL("bat.png").path.hasSuffix("/Assets/Sprites/Enemies/bat.png")) // not the kit's part of that name
     #expect(assetURL("slime.png").path.hasSuffix("/Assets/slime.png")) // at the top first
     #expect(assetURL("level.tilemap").path.hasSuffix("/Assets/Maps/a/level.tilemap")) // then the first by path,
     #expect(assetIndex.withLock { $0.warned.contains("level.tilemap") }) // which the console mentions
