@@ -196,3 +196,17 @@ private extension String {
     #expect(try person("helmet") == [c, c, c, c, c, c, h, h, h, c, c, 0, 0, 0, 0, 0, 0, 0, 0, 0]) // between its guards, under its dome
     #expect(try person("cap") == [c, c, c, c, c, c, h, h, h, c, c, h, h, h, h, h, h, h, h, h]) // below its edge
 }
+
+@Test func aSlotCanWearItsOwnRampOfAMaterial() throws {
+    // Frames of one pixel: a hat over a robe, both in cloth, drawn blue; the person wears red cloth and a black hat.
+    let kit = KitFile(frameWidth: 1, frameHeight: 1, slots: [.init(name: "robe", materials: ["cloth"]), .init(name: "hat", materials: ["cloth"])],
+                      materials: [.init(name: "cloth", ramps: [.init(name: "blue", colors: ["#2040A0"]), .init(name: "red", colors: ["#A02020"]),
+                                                               .init(name: "black", colors: ["#202020"])])])
+    let images: [String: [UInt32]] = ["robe/long": [0x2040_A0FF, 0x2040_A0FF], "hat/cap": [0x2040_A0FF, 0]]
+    func person(_ wears: [String: String]) throws -> [UInt32] {
+        try PersonFile(parts: ["robe": "long", "hat": "cap"], wears: wears).compose(kit) { (images[$0]!, 2) }.pixels
+    }
+    #expect(try person(["cloth": "red", "hat.cloth": "black"]) == [0x2020_20FF, 0xA020_20FF]) // the hat its own, the robe the cloth's
+    #expect(try person(["hat.cloth": "black"]) == [0x2020_20FF, 0x2040_A0FF]) // the robe as drawn
+    #expect(throws: PersonError.self) { try person(["cap.cloth": "black"]) } // no such slot
+}

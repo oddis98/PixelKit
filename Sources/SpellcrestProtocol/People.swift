@@ -82,8 +82,11 @@ public struct KitFile: AssetFile, Equatable, Sendable {
         public var name: String
         /// Its sets of shades. Parts are drawn in the first; each has as many shades as it.
         public var ramps: [Ramp]
+        /// Whether all of a person wears it in one ramp, as skin, which a builder offers once; otherwise each slot's
+        /// part can wear one of its own, as a red hat on a blue robe.
+        public var shared: Bool?
 
-        public init(name: String, ramps: [Ramp]) { (self.name, self.ramps) = (name, ramps) }
+        public init(name: String, ramps: [Ramp], shared: Bool? = nil) { (self.name, self.ramps, self.shared) = (name, ramps, shared) }
     }
 
     /// A set of a material's shades, darkest first, as "#RRGGBB", like "blue" for cloth.
@@ -112,7 +115,8 @@ public struct KitFile: AssetFile, Equatable, Sendable {
 public struct PersonFile: AssetFile, Equatable, Sendable {
     /// The part in each slot, by its name in the slot's folder, like "hat": "witch"; a slot not here is empty.
     public var parts: [String: String]
-    /// The ramp worn of each material, by name, like "cloth": "black"; a material not here is worn as drawn.
+    /// The ramp worn of each material, by name, like "cloth": "black", or of a material in one slot, by both, like
+    /// "hat.cloth": "red", which that slot's part wears in place of the material's; a material not here is worn as drawn.
     public var wears: [String: String]?
 
     public init(parts: [String: String], wears: [String: String]? = nil) { (self.parts, self.wears) = (parts, wears) }
@@ -175,7 +179,9 @@ public extension PersonFile {
         var layers: [(slot: KitFile.Slot, pixels: [UInt32])] = []
         for (slot, path, image) in worn {
             var pixels = image.pixels
-            let swap = (slot.materials ?? []).reduce(into: [UInt32: UInt32]()) { all, material in all.merge(swaps[material] ?? [:]) { a, _ in a } }
+            let swap = (slot.materials ?? []).reduce(into: [UInt32: UInt32]()) { all, material in
+                all.merge(swaps["\(slot.name).\(material)"] ?? swaps[material] ?? [:]) { a, _ in a } // the slot's own ramp, or the material's
+            }
             if !swap.isEmpty {
                 for i in pixels.indices where pixels[i] & 0xFF != 0 {
                     if let worn = swap[pixels[i] >> 8] { pixels[i] = worn << 8 | pixels[i] & 0xFF }
@@ -268,10 +274,17 @@ public extension PersonFile {
         return inside
     }
 
-    /// For each material the person wears in other shades than drawn, its drawn colors to the worn ones, 0xRRGGBB.
+    /// For each material the person wears in other shades than drawn, and each slot's own, its drawn colors to the worn
+    /// ones, 0xRRGGBB, by what `wears` names them by: "cloth", or "hat.cloth".
     private func swaps(_ kit: KitFile) throws -> [String: [UInt32: UInt32]] {
         var swaps: [String: [UInt32: UInt32]] = [:]
-        for (name, rampName) in (wears ?? [:]).sorted(by: { $0.key < $1.key }) {
+        for (key, rampName) in (wears ?? [:]).sorted(by: { $0.key < $1.key }) {
+            let dot = key.firstIndex(of: "."), name = dot.map { String(key[key.index(after: $0)...]) } ?? key
+            if let dot {
+                let slotName = String(key[..<dot])
+                guard let slot = kit.slots.first(where: { $0.name == slotName }) else { throw PersonError("the kit has no slot called \(slotName)") }
+                guard slot.materials?.contains(name) == true else { throw PersonError("the kit's \(slotName) isn't drawn in \(name)") }
+            }
             guard let material = kit.material(name) else { throw PersonError("the kit has no material called \(name)") }
             guard let drawn = material.ramps.first else { throw PersonError("the kit's \(name) has no ramps") }
             guard let worn = material.ramps.first(where: { $0.name == rampName }) else {
@@ -281,7 +294,7 @@ public extension PersonFile {
                 throw PersonError("\(name)'s \(worn.name) has \(worn.colors.count) shades, and \(drawn.name), which its parts are drawn in, has \(drawn.colors.count)")
             }
             let (from, to) = (try drawn.colors.map(rgb), try worn.colors.map(rgb))
-            swaps[name] = Dictionary(zip(from, to)) { a, _ in a }
+            swaps[key] = Dictionary(zip(from, to)) { a, _ in a }
         }
         return swaps
     }
