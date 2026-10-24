@@ -12,11 +12,11 @@ private let parts: [String: [UInt32]] = [
     "body/plain": [0xF0C0A0FF, 0x301000FF], // skin, and a boot in the hair's brown
     "robe/long": [0x000020FF, 0], // the lit blue, and clear
     "hat/witch": [0x00001080, 0x301000FF], // the dark blue half see-through, and hair
-    "hat/tiny": [0x000010FF],
+    "hat/wide": [0x000010FF, 0x000010FF, 0x000010FF],
 ]
 
 private func compose(_ person: PersonFile) throws -> [UInt32] {
-    try person.compose(kit) { slot, name in parts["\(slot)/\(name)"]! }
+    try person.compose(kit) { path in (parts[path]!, parts[path]!.count) }.pixels // a row each
 }
 
 @Test func aPersonStacksItsPartsBackToFrontInTheShadesItWears() throws {
@@ -40,7 +40,7 @@ private func compose(_ person: PersonFile) throws -> [UInt32] {
     #expect(message(PersonFile(parts: ["cape": "short"])) == "the kit has no slot called cape")
     #expect(message(PersonFile(parts: ["body": "plain"], wears: ["skin": "tan"])) == "the kit has no material called skin")
     #expect(message(PersonFile(parts: [:])) == "a person wears a part in one slot at least")
-    #expect(message(PersonFile(parts: ["body": "plain", "hat": "tiny"]))?.hasPrefix("hat/tiny has 1 pixels, and body/plain 2") == true)
+    #expect(message(PersonFile(parts: ["body": "plain", "hat": "wide"])) == "hat/wide is 3 pixels wide and a person 2: a part has every frame, laid out as theirs")
 }
 
 @Test func kitsAndPeopleReadAsTheyWereWritten() throws {
@@ -52,4 +52,24 @@ private func compose(_ person: PersonFile) throws -> [UInt32] {
     try witch.write(to: folder.appending(path: "witch.person"))
     #expect(try PersonFile(contentsOf: folder.appending(path: "witch.person")) == witch)
     #expect(kit.sheet == SheetFile(frameWidth: 2, frameHeight: 1, animations: ["stand": .init(frames: [0], fps: 2)]))
+}
+
+@Test func aPartDrawnOnceFollowsItsAnchorAndLeavesTheBodyInFrontOfIt() throws {
+    // Four frames of two pixels: a body, and a cap drawn once that follows the head, which moves a pixel right in
+    // frame 2 and is gone in frame 3; in frame 1 an arm is in front of the head's second pixel.
+    let kit = KitFile(frameWidth: 2, frameHeight: 1, frames: 4, columns: 4, slots: [.init(name: "body"), .init(name: "hat", follows: "head")],
+                      materials: [], anchors: ["head": [.init(0, 0), .init(0, 0), .init(1, 0), nil]], front: "front")
+    let (b, c): (UInt32, UInt32) = (0x8040_20FF, 0x2040_A0FF)
+    let images: [String: [UInt32]] = ["body/plain": [b, b, b, b, b, b, b, b], "hat/cap": [c, c], "hat/big": [c, c, c], "front": [0, 0, 0, 0xFF, 0, 0, 0, 0]]
+    func person(_ parts: [String: String]) throws -> (pixels: [UInt32], width: Int) {
+        try PersonFile(parts: parts).compose(kit) { path in (images[path]!, path == "hat/big" ? 3 : path == "hat/cap" ? 2 : 8) }
+    }
+    #expect(try person(["body": "plain", "hat": "cap"]) == ([c, c, c, b, b, c, b, b], 8))
+    #expect(try person(["hat": "cap"]) == ([c, c, c, 0, 0, c, 0, 0], 8)) // laid out as the kit says, with no part of every frame
+    #expect(throws: PersonError("hat/big is 3 pixels wide and a person 8: a part has every frame, laid out as theirs, or one frame to follow the head")) {
+        try person(["body": "plain", "hat": "big"])
+    }
+    let file = FileManager.default.temporaryDirectory.appending(path: "kit-\(UUID()).json")
+    try kit.write(to: file)
+    #expect(try KitFile(contentsOf: file) == kit && String(decoding: try Data(contentsOf: file), as: UTF8.self).contains(#""head":[[0,0],[0,0],[1,0],null]"#))
 }
