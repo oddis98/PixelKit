@@ -60,6 +60,7 @@ import Synchronization
     var sheets: [String: SheetFile?] = [:] // nil: the image has no .json, so it's a single frame
     var fonts: [String: Font] = [:] // image fonts, measured on first use
     var modified: [String: Date?] = [:] // each loaded file's modification date, to spot edits
+    var wearing: [String: Set<String>] = [:] // the people made of each part, and of the kit, by their images' names
     var warned: Set<String> = []
     var commands: MTLCommandBuffer!
     /// The pass quads go to now: the canvas's, a light map's, or the drawable's.
@@ -297,6 +298,7 @@ import Synchronization
     /// console says why, once, so the game goes on; where files can change, it's loaded once its file is there.
     func texture(_ name: String) -> MTLTexture {
         if let texture = textures[name] { return texture }
+        if name.hasPrefix(Person.prefix) { return personTexture(name) }
         let url = assetURL("\(name).png")
         modified["\(name).png"] = modificationDate(url)
         do {
@@ -314,6 +316,7 @@ import Synchronization
     /// How an image is cut into frames, from its `.json`; nil if it has none.
     func sheet(_ name: String) -> SheetFile? {
         if let sheet = sheets[name] { return sheet }
+        if name.hasPrefix(Person.prefix) { return madePerson(name)?.sheet }
         let url = assetURL("\(name).json")
         var sheet: SheetFile?
         if FileManager.default.fileExists(atPath: url.path) {
@@ -331,6 +334,10 @@ import Synchronization
             let url = assetURL(file)
             guard modificationDate(url) != date else { continue }
             modified[file] = modificationDate(url)
+            if file.hasPrefix("Parts/") { // a part, or the kit: the people made of it are made again
+                remakePeople(wearing: file)
+                continue
+            }
             let name = (file as NSString).deletingPathExtension
             if file.hasSuffix(".json") {
                 (sheets[name], fonts[name]) = (nil, nil) // read again on next use
@@ -858,7 +865,8 @@ func modificationDate(_ url: URL) -> Date? {
 /// The size of `Assets/<name>.png`'s frames, as its `.json` cuts it up, or of the whole image; nil without one. Read
 /// `once`.
 func frameSize(_ name: String) -> Size? {
-    once(name, in: framesRead) {
+    if name.hasPrefix(Person.prefix) { return (try? Person.kit()).map { Size($0.frameWidth, $0.frameHeight) } } // a person's: the kit's frames
+    return once(name, in: framesRead) {
         guard let source = CGImageSourceCreateWithURL(assetURL("\(name).png") as CFURL, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let width = properties[kCGImagePropertyPixelWidth] as? Int, let height = properties[kCGImagePropertyPixelHeight] as? Int else { return nil }

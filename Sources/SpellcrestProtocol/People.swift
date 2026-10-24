@@ -24,6 +24,17 @@ public struct KitFile: AssetFile, Equatable, Sendable {
     /// A part with every frame, `Parts/<front>.png`, whose pixels are where the body is in front of the head, as an arm
     /// raised before a hat's brim: there, parts that follow an anchor leave what's behind them.
     public var front: String?
+    /// What a person does that looks different with what they wear, by name, like an attack, which is a sword's slash
+    /// but a staff's spell: each becomes an animation of the person's, the frames of the one their part takes.
+    public var actions: [String: Action]?
+
+    /// An action's animation, by the part a person wears in a slot: by its name, or "" for none and "*" for any other.
+    public struct Action: Codable, Equatable, Sendable {
+        public var slot: String
+        public var animations: [String: String]
+
+        public init(slot: String, animations: [String: String]) { (self.slot, self.animations) = (slot, animations) }
+    }
 
     public struct Slot: Codable, Equatable, Sendable {
         public var name: String
@@ -31,27 +42,39 @@ public struct KitFile: AssetFile, Equatable, Sendable {
         public var materials: [String]?
         /// The anchor its parts of one frame follow; nil when its parts have every frame.
         public var follows: String?
+        /// The slots whose parts its parts keep inside them, as a hat keeps hair: none of theirs shows above its
+        /// lowest pixel in each column it covers, or beside it above where its edge comes down to, but in a hole it
+        /// closes round, as a hood's opening for the face. Hair below a brim still shows.
+        public var hides: [String]?
+        /// Its parts, by name, that keep what it hides wholly inside them, as a hood or a helmet keeps hair: none of
+        /// it shows but in their opening, where they're on both sides of it and above it, as round a face.
+        public var wraps: [String]?
 
-        public init(name: String, materials: [String]? = nil, follows: String? = nil) {
-            (self.name, self.materials, self.follows) = (name, materials, follows)
+        public init(name: String, materials: [String]? = nil, follows: String? = nil, hides: [String]? = nil, wraps: [String]? = nil) {
+            (self.name, self.materials, self.follows, self.hides, self.wraps) = (name, materials, follows, hides, wraps)
         }
     }
 
-    /// How far, in pixels, as `[x, y]` in the file.
+    /// How far, in pixels, and which of the part's frames, as `[x, y]` or `[x, y, frame]` in the file: a part drawn once
+    /// can have a few frames side by side, like a sword upright, level and swung down, and a frame of the person's says
+    /// which it shows; the first unless it says.
     public struct Offset: Codable, Equatable, Sendable {
         public var x, y: Int
+        public var frame: Int?
 
-        public init(_ x: Int, _ y: Int) { (self.x, self.y) = (x, y) }
+        public init(_ x: Int, _ y: Int, frame: Int? = nil) { (self.x, self.y, self.frame) = (x, y, frame) }
 
         public init(from decoder: Decoder) throws {
-            var pair = try decoder.unkeyedContainer()
-            (x, y) = (try pair.decode(Int.self), try pair.decode(Int.self))
+            var values = try decoder.unkeyedContainer()
+            (x, y) = (try values.decode(Int.self), try values.decode(Int.self))
+            frame = values.isAtEnd ? nil : try values.decode(Int.self)
         }
 
         public func encode(to encoder: Encoder) throws {
-            var pair = encoder.unkeyedContainer()
-            try pair.encode(x)
-            try pair.encode(y)
+            var values = encoder.unkeyedContainer()
+            try values.encode(x)
+            try values.encode(y)
+            if let frame { try values.encode(frame) }
         }
     }
 
@@ -72,9 +95,9 @@ public struct KitFile: AssetFile, Equatable, Sendable {
     }
 
     public init(frameWidth: Int, frameHeight: Int, frames: Int? = nil, columns: Int? = nil, animations: [String: SheetFile.Animation]? = nil,
-                slots: [Slot], materials: [Material], anchors: [String: [Offset?]]? = nil, front: String? = nil) {
+                slots: [Slot], materials: [Material], anchors: [String: [Offset?]]? = nil, front: String? = nil, actions: [String: Action]? = nil) {
         (self.frameWidth, self.frameHeight, self.frames, self.columns, self.animations) = (frameWidth, frameHeight, frames, columns, animations)
-        (self.slots, self.materials, self.anchors, self.front) = (slots, materials, anchors, front)
+        (self.slots, self.materials, self.anchors, self.front, self.actions) = (slots, materials, anchors, front, actions)
     }
 
     /// How a person's image is cut up: the kit's frames and animations.
@@ -103,6 +126,19 @@ public struct PersonError: Error, Equatable, CustomStringConvertible {
 }
 
 public extension PersonFile {
+    /// How the person's image is cut up: the kit's frames and animations, and an animation for each of the kit's
+    /// actions, the frames of the one the part they wear takes.
+    func sheet(_ kit: KitFile) -> SheetFile {
+        var sheet = kit.sheet
+        for (name, action) in kit.actions ?? [:] {
+            let worn = parts[action.slot] ?? ""
+            guard let animation = action.animations[worn] ?? (worn.isEmpty ? nil : action.animations["*"]),
+                  let frames = kit.animations?[animation] else { continue }
+            sheet.animations = (sheet.animations ?? [:]).merging([name: frames]) { $1 }
+        }
+        return sheet
+    }
+
     /// The person's pixels, 0xRRGGBBAA with straight alpha, and how wide their image is: their parts stacked back to
     /// front in the kit's order, each over the ones behind it, in the shades the person wears of its slot's materials.
     /// A part of one frame in a slot that follows an anchor is drawn at the anchor in each frame. `part` gives an
@@ -115,9 +151,10 @@ public extension PersonFile {
         let worn = try kit.slots.compactMap { slot in try parts[slot.name].map { (slot, "\(slot.name)/\($0)", try part("\(slot.name)/\($0)")) } }
         guard !worn.isEmpty else { throw PersonError("a person wears a part in one slot at least") }
         let (fw, fh) = (kit.frameWidth, kit.frameHeight)
-        func isFrame(_ image: (pixels: [UInt32], width: Int)) -> Bool { image.width == fw && image.pixels.count == fw * fh }
+        // A part drawn once, as one frame or a few side by side to choose from.
+        func isFrames(_ image: (pixels: [UInt32], width: Int)) -> Bool { image.width % fw == 0 && image.pixels.count == image.width * fh }
         // The image's size: as the kit lays it out, or as its first part with every frame is.
-        let whole = worn.first { $0.0.follows == nil || !isFrame($0.2) }
+        let whole = worn.first { $0.0.follows == nil || !isFrames($0.2) }
         let (width, height): (Int, Int)
         if let frames = kit.frames, let columns = kit.columns {
             (width, height) = (columns * fw, (frames + columns - 1) / columns * fh)
@@ -134,7 +171,8 @@ public extension PersonFile {
             }
             return mask.pixels
         }
-        var stacked = [UInt32](repeating: 0, count: width * height)
+        // Each part laid out as the person's image, in the shades it wears.
+        var layers: [(slot: KitFile.Slot, pixels: [UInt32])] = []
         for (slot, path, image) in worn {
             var pixels = image.pixels
             let swap = (slot.materials ?? []).reduce(into: [UInt32: UInt32]()) { all, material in all.merge(swaps[material] ?? [:]) { a, _ in a } }
@@ -144,28 +182,90 @@ public extension PersonFile {
                 }
             }
             if image.width == width, pixels.count == width * height {
-                for i in pixels.indices where pixels[i] & 0xFF != 0 { stacked[i] = over(pixels[i], stacked[i]) }
-            } else if isFrame(image), let anchor = slot.follows {
+                layers.append((slot, pixels))
+            } else if isFrames(image), let anchor = slot.follows {
                 guard let offsets = kit.anchors?[anchor] else { throw PersonError("the kit's \(slot.name) follows \(anchor), which isn't among its anchors") }
+                var placed = [UInt32](repeating: 0, count: width * height)
+                let variants = image.width / fw
                 for frame in 0..<min(count, offsets.count) {
                     guard let offset = offsets[frame] else { continue }
                     let (left, top) = (frame % columns * fw, frame / columns * fh)
+                    let from = min(max(offset.frame ?? 0, 0), variants - 1) * fw // the part's frame this one shows
                     for y in 0..<fh {
-                        for x in 0..<fw where pixels[y * fw + x] & 0xFF != 0 {
+                        for x in 0..<fw where pixels[y * image.width + from + x] & 0xFF != 0 {
                             let (fx, fy) = (x + offset.x, y + offset.y)
                             guard (0..<fw).contains(fx), (0..<fh).contains(fy) else { continue }
                             let i = (top + fy) * width + left + fx
                             if let front, front[i] & 0xFF != 0 { continue } // an arm in front of the head
-                            stacked[i] = over(pixels[y * fw + x], stacked[i])
+                            placed[i] = pixels[y * image.width + from + x]
                         }
                     }
                 }
+                layers.append((slot, placed))
             } else {
                 throw PersonError("\(path) is \(image.width) pixels wide and a person \(width): a part has every frame, laid out as theirs"
-                                  + (slot.follows == nil ? "" : ", or one frame to follow the \(slot.follows!)"))
+                                  + (slot.follows == nil ? "" : ", or a frame or a few in a row to follow the \(slot.follows!)"))
             }
         }
+        // What each slot's parts are kept inside of, as hair is by a hat.
+        var kept: [String: [Bool]] = [:]
+        for (slot, pixels) in layers {
+            let wraps = slot.wraps?.contains(parts[slot.name] ?? "") == true
+            for hidden in slot.hides ?? [] {
+                let inside = covered(pixels, width: width, height: height, frameWidth: fw, frameHeight: fh, wrapping: wraps)
+                kept[hidden] = kept[hidden].map { zip($0, inside).map { $0 || $1 } } ?? inside
+            }
+        }
+        var stacked = [UInt32](repeating: 0, count: width * height)
+        for (slot, pixels) in layers {
+            let hidden = kept[slot.name]
+            for i in pixels.indices where pixels[i] & 0xFF != 0 && hidden?[i] != true { stacked[i] = over(pixels[i], stacked[i]) }
+        }
         return (stacked, width)
+    }
+
+    /// Where a part keeps others inside it, in each frame: above its lowest pixel in every column it has pixels in, and
+    /// beside it above the lowest pixel of the nearest column it has, but in a hole it closes round, which the outside
+    /// can't reach without crossing it. A part wrapping them keeps them everywhere but in its opening: where it has
+    /// pixels on both sides in the row and above in the column.
+    private func covered(_ pixels: [UInt32], width: Int, height: Int, frameWidth fw: Int, frameHeight fh: Int, wrapping: Bool) -> [Bool] {
+        var inside = [Bool](repeating: false, count: width * height)
+        for top in stride(from: 0, to: height, by: fh) {
+            for left in stride(from: 0, to: width, by: fw) {
+                func has(_ x: Int, _ y: Int) -> Bool { pixels[(top + y) * width + left + x] & 0xFF != 0 }
+                if wrapping {
+                    guard (0..<fh).contains(where: { y in (0..<fw).contains { has($0, y) } }) else { continue }
+                    var above = [Bool](repeating: false, count: fw) // whether the part has a pixel above, by column
+                    for y in 0..<fh {
+                        let row = (0..<fw).filter { has($0, y) }
+                        for x in 0..<fw {
+                            let opening = !has(x, y) && above[x] && (row.first ?? fw) < x && x < (row.last ?? -1)
+                            if !opening { inside[(top + y) * width + left + x] = true }
+                        }
+                        for x in row { above[x] = true }
+                    }
+                    continue
+                }
+                var outside = Set<Int>(), todo = [Int]() // the frame's clear pixels the edge reaches, by y * fw + x
+                for x in 0..<fw { for y in [0, fh - 1] where !has(x, y) { todo.append(y * fw + x) } }
+                for y in 0..<fh { for x in [0, fw - 1] where !has(x, y) { todo.append(y * fw + x) } }
+                while let i = todo.popLast() {
+                    guard outside.insert(i).inserted else { continue }
+                    let (x, y) = (i % fw, i / fw)
+                    for (a, b) in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)] where (0..<fw).contains(a) && (0..<fh).contains(b) && !has(a, b) {
+                        todo.append(b * fw + a)
+                    }
+                }
+                let lowest = (0..<fw).map { x in (0..<fh).last { has(x, $0) } }
+                let columns = lowest.indices.filter { lowest[$0] != nil }
+                for x in 0..<fw {
+                    // beside it, as low as the nearest column it covers
+                    guard let nearest = columns.min(by: { (abs($0 - x), -lowest[$0]!) < (abs($1 - x), -lowest[$1]!) }) else { break }
+                    for y in 0...lowest[nearest]! where has(x, y) || outside.contains(y * fw + x) { inside[(top + y) * width + left + x] = true }
+                }
+            }
+        }
+        return inside
     }
 
     /// For each material the person wears in other shades than drawn, its drawn colors to the worn ones, 0xRRGGBB.
